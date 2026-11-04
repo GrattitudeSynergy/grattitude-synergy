@@ -311,7 +311,18 @@ export interface ShowupPolicyConfig {
   lateDeductionDays: number;     // 0.5
   halfDayMinHours: number;       // 4.5
   fullDayMinHours: number;       // 7.0
-  elAdvanceNoticeDays: number;   // 15
+  elAdvanceNoticeDays: number;   // 5
+  clQuotaPerYear?: number;       // 0
+  slQuotaPerYear?: number;       // 12
+  elQuotaPerYear?: number;       // 12
+  optionalHolidaysPerYear?: number; // 3
+  wfhRemoteDaysPerMonth?: number;   // 4
+  compOffApplyWindowDays?: number;  // 2
+  compOffValidityDays?: number;     // 30
+  maternityQuotaDays?: number;      // 180
+  paternityQuotaDays?: number;      // 15
+  compOffQuotaDays?: number;        // 2
+  lwpQuotaDays?: number;            // 365
   updatedAt: string;
 }
 

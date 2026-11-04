@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   XCircle,
   Zap,
+  Umbrella,
 } from 'lucide-react';
 import {
   Card,
@@ -81,7 +82,7 @@ export const ShowUpModule: React.FC<{
 
   // Leave Request Form
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
-  const [leaveType, setLeaveType] = useState<LeaveType>('CL');
+  const [leaveType, setLeaveType] = useState<LeaveType>('SL');
   const [leaveStart, setLeaveStart] = useState(
     new Date().toISOString().slice(0, 10)
   );
@@ -127,7 +128,7 @@ export const ShowUpModule: React.FC<{
       'showup_policy',
       (items) => {
         const found = items.find((i) => i.id === 'default_policy');
-        if (found) setPolicy(found);
+        if (found) setPolicy({ ...SEED_SHOWUP_POLICY, ...found });
       }
     );
     const u4 = FirestoreEngine.subscribeCollection<ShowupLeaveBalance>(
@@ -204,6 +205,47 @@ export const ShowUpModule: React.FC<{
     'LWP',
   ];
 
+  const getPolicyQuotaForType = (
+    lt: LeaveType,
+    pol: ShowupPolicyConfig = policy
+  ): number => {
+    switch (lt) {
+      case 'CL':
+        return pol.clQuotaPerYear ?? 0;
+      case 'SL':
+        return pol.slQuotaPerYear ?? 12;
+      case 'EL':
+        return pol.elQuotaPerYear ?? 12;
+      case 'Optional':
+        return pol.optionalHolidaysPerYear ?? 3;
+      case 'Maternity':
+        return pol.maternityQuotaDays ?? 180;
+      case 'Paternity':
+        return pol.paternityQuotaDays ?? 15;
+      case 'Comp Off':
+        return pol.compOffQuotaDays ?? 2;
+      case 'LWP':
+        return pol.lwpQuotaDays ?? 365;
+    }
+  };
+
+  const getEmployeeLeaveBalance = (
+    empId: string,
+    lt: LeaveType,
+    pol: ShowupPolicyConfig = policy
+  ): number => {
+    const baseQuota = getPolicyQuotaForType(lt, pol);
+    const approvedDaysTaken = leaveRequests
+      .filter(
+        (r) =>
+          r.employeeId === empId &&
+          r.leaveType === lt &&
+          r.status === 'Approved'
+      )
+      .reduce((sum, r) => sum + (r.days || 0), 0);
+    return Math.max(0, baseQuota - approvedDaysTaken);
+  };
+
   const handleApplyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     setLeaveError('');
@@ -228,6 +270,14 @@ export const ShowUpModule: React.FC<{
       1,
       Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)) + 1
     );
+
+    const availableBal = getEmployeeLeaveBalance(currentEmployee.id, leaveType);
+    if (days > availableBal) {
+      setLeaveError(
+        `Insufficient ${leaveType} balance: requesting ${days} day(s), but only ${availableBal} day(s) available under current HRMS policy.`
+      );
+      return;
+    }
 
     const newReq: ShowupLeaveRequest = {
       id: `leave_${Date.now()}`,
@@ -302,23 +352,14 @@ export const ShowUpModule: React.FC<{
 
     if (decision === 'Approved') {
       const empBal = leaveBalances.find((b) => b.employeeId === req.employeeId);
-      const currentBalances = empBal?.balances || {
-        CL: 12,
-        SL: 10,
-        EL: 15,
-        Optional: 3,
-        Maternity: 180,
-        Paternity: 15,
-        'Comp Off': 2,
-        LWP: 365,
-      };
-      const updatedBalances = {
-        ...currentBalances,
-        [req.leaveType]: Math.max(
-          0,
-          (currentBalances[req.leaveType] || 0) - req.days
-        ),
-      };
+      const updatedBalances = {} as Record<LeaveType, number>;
+      for (const lt of STATUTORY_LEAVE_TYPES) {
+        const currentAvailable = getEmployeeLeaveBalance(req.employeeId, lt);
+        updatedBalances[lt] =
+          lt === req.leaveType
+            ? Math.max(0, currentAvailable - req.days)
+            : currentAvailable;
+      }
       await FirestoreEngine.setDocument('showup_leave_balances', req.employeeId, {
         id: req.employeeId,
         employeeId: req.employeeId,
@@ -753,23 +794,8 @@ export const ShowUpModule: React.FC<{
           >
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 mb-4">
               {STATUTORY_LEAVE_TYPES.map((lt) => {
-                const bal =
-                  myLeaveBalance?.balances?.[lt] ??
-                  (lt === 'CL'
-                    ? 12
-                    : lt === 'SL'
-                    ? 10
-                    : lt === 'EL'
-                    ? 15
-                    : lt === 'Optional'
-                    ? 3
-                    : lt === 'Maternity'
-                    ? 180
-                    : lt === 'Paternity'
-                    ? 15
-                    : lt === 'Comp Off'
-                    ? 2
-                    : 365);
+                const bal = getEmployeeLeaveBalance(currentEmployee.id, lt);
+                const annualQuota = getPolicyQuotaForType(lt);
                 return (
                   <div
                     key={lt}
@@ -780,6 +806,9 @@ export const ShowUpModule: React.FC<{
                     </div>
                     <div className="text-base font-extrabold text-neutral-900 mt-0.5">
                       {bal} <span className="text-[10px] font-normal">days</span>
+                    </div>
+                    <div className="text-[10px] text-neutral-400 mt-0.5">
+                      Quota: {annualQuota}/yr
                     </div>
                   </div>
                 );
@@ -1319,7 +1348,7 @@ export const ShowUpModule: React.FC<{
 
       {/* TAB 6: HRMS POLICY OVERRIDES & HOLIDAYS (ADMIN) */}
       {activeTab === 'policy-admin' && isAdmin && (
-        <div className="space-y-5">
+        <div className="space-y-6">
           <Card
             title="HRMS Policy Engine Configuration (showup_policy)"
             subtitle="Configure shift timings, grace cutoff, late-mark rule, and half-day thresholds."
@@ -1366,42 +1395,362 @@ export const ShowUpModule: React.FC<{
               </div>
               <div>
                 <label className="block text-xs font-bold text-neutral-700 mb-1">
-                  EL Advance Notice (Days)
+                  Late Marks per Deduction
                 </label>
                 <input
                   type="number"
-                  value={policy.elAdvanceNoticeDays}
+                  min={1}
+                  value={policy.lateMarksPerDeduction}
                   onChange={(e) =>
                     setPolicy({
                       ...policy,
-                      elAdvanceNoticeDays: Number(e.target.value),
+                      lateMarksPerDeduction: Math.max(1, Number(e.target.value)),
                     })
                   }
                   className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
                 />
               </div>
             </div>
-            <div className="mt-4 flex justify-end">
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={async () => {
-                  await FirestoreEngine.setDocument(
-                    'showup_policy',
-                    'default_policy',
-                    policy
-                  );
-                  showToast(
-                    'success',
-                    'HRMS Policy Saved',
-                    'Updated shift and grace period parameters.'
-                  );
-                }}
-              >
-                Save HRMS Policy
-              </Button>
-            </div>
           </Card>
+
+          {/* LEAVE QUOTAS & RULES SECTION */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 px-1">
+              <Umbrella className="w-4 h-4 text-neutral-700" />
+              <h3 className="text-sm font-extrabold tracking-wide text-neutral-900 uppercase">
+                LEAVE QUOTAS &amp; RULES
+              </h3>
+            </div>
+
+            <div className="bg-white border border-neutral-200 rounded-2xl p-6 shadow-xs space-y-6">
+              {/* Row 1: CL, SL, EL, EL Advance Notice */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Casual Leave (CL) / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.clQuotaPerYear ?? 0}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        clQuotaPerYear: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {policy.clQuotaPerYear ?? 0} CL corporate policy
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Sick Leave (SL) / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.slQuotaPerYear ?? 12}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        slQuotaPerYear: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400 leading-relaxed">
+                    {policy.slQuotaPerYear ?? 12} days / year. Can be applied
+                    during or post-leave
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Earned Leave (EL) / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.elQuotaPerYear ?? 12}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        elQuotaPerYear: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {policy.elQuotaPerYear ?? 12} days / year (
+                    {((policy.elQuotaPerYear ?? 12) / 12).toFixed(1)} day / month)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    EL Advance Notice (Days)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.elAdvanceNoticeDays ?? 5}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        elAdvanceNoticeDays: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Apply min {policy.elAdvanceNoticeDays ?? 5} days in advance
+                  </p>
+                </div>
+              </div>
+
+              {/* Row 2: Optional Holidays, WFH Remote Days, Comp Off Apply Window, Comp Off Validity */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Optional Holidays / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.optionalHolidaysPerYear ?? 3}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        optionalHolidaysPerYear: Math.max(
+                          0,
+                          Number(e.target.value)
+                        ),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Elective festival days
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    WFH Remote Days / Month
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.wfhRemoteDaysPerMonth ?? 4}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        wfhRemoteDaysPerMonth: Math.max(
+                          0,
+                          Number(e.target.value)
+                        ),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Monthly remote cap
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Comp Off Apply Window (Days)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.compOffApplyWindowDays ?? 2}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        compOffApplyWindowDays: Math.max(
+                          0,
+                          Number(e.target.value)
+                        ),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Apply within {policy.compOffApplyWindowDays ?? 2} working days
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Comp Off Validity (Days)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.compOffValidityDays ?? 30}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        compOffValidityDays: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Use within {policy.compOffValidityDays ?? 30} days
+                  </p>
+                </div>
+              </div>
+
+              {/* Row 3: Statutory Quotas for Remaining Leave Sections (Maternity, Paternity, Comp Off, LWP) */}
+              <div className="pt-4 border-t border-neutral-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Maternity Leave / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.maternityQuotaDays ?? 180}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        maternityQuotaDays: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {policy.maternityQuotaDays ?? 180} days statutory maternity
+                    quota
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Paternity Leave / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.paternityQuotaDays ?? 15}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        paternityQuotaDays: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {policy.paternityQuotaDays ?? 15} days statutory paternity
+                    quota
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    Comp Off Quota / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.compOffQuotaDays ?? 2}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        compOffQuotaDays: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {policy.compOffQuotaDays ?? 2} days annual Comp Off balance
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-2">
+                    LWP (Leave Without Pay) Cap / Year
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.lwpQuotaDays ?? 365}
+                    onChange={(e) =>
+                      setPolicy({
+                        ...policy,
+                        lwpQuotaDays: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="w-full px-3.5 py-2.5 text-sm font-mono font-semibold text-neutral-900 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {policy.lwpQuotaDays ?? 365} days unpaid leave cap
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={async () => {
+                    const updatedPolicy: ShowupPolicyConfig = {
+                      ...policy,
+                      updatedAt: new Date().toISOString(),
+                    };
+                    await FirestoreEngine.setDocument(
+                      'showup_policy',
+                      'default_policy',
+                      updatedPolicy
+                    );
+
+                    // Synchronize showup_leave_balances across all employees with updated quotas
+                    for (const emp of employees) {
+                      const empBal = leaveBalances.find(
+                        (b) => b.employeeId === emp.id
+                      );
+                      const updatedBalances = {} as Record<LeaveType, number>;
+                      for (const lt of STATUTORY_LEAVE_TYPES) {
+                        updatedBalances[lt] = getEmployeeLeaveBalance(
+                          emp.id,
+                          lt,
+                          updatedPolicy
+                        );
+                      }
+                      await FirestoreEngine.setDocument(
+                        'showup_leave_balances',
+                        emp.id,
+                        {
+                          id: emp.id,
+                          employeeId: emp.id,
+                          balances: updatedBalances,
+                          lateMarksCount: empBal?.lateMarksCount || 0,
+                          lateLeaveDeducted: empBal?.lateLeaveDeducted || 0,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      );
+                    }
+
+                    showToast(
+                      'success',
+                      'HRMS Policy & Leave Quotas Saved',
+                      'Updated shift timings and statutory leave quotas across all employees.'
+                    );
+                  }}
+                >
+                  Save HRMS Policy &amp; Leave Quotas
+                </Button>
+              </div>
+            </div>
+          </div>
 
           <Card
             title="Corporate Holidays Calendar (showup_holidays)"
@@ -1497,11 +1846,14 @@ export const ShowUpModule: React.FC<{
               onChange={(e) => setLeaveType(e.target.value as LeaveType)}
               className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
             >
-              {STATUTORY_LEAVE_TYPES.map((lt) => (
-                <option key={lt} value={lt}>
-                  {lt}
-                </option>
-              ))}
+              {STATUTORY_LEAVE_TYPES.map((lt) => {
+                const avail = getEmployeeLeaveBalance(currentEmployee.id, lt);
+                return (
+                  <option key={lt} value={lt}>
+                    {lt} ({avail} day{avail === 1 ? '' : 's'} available)
+                  </option>
+                );
+              })}
             </select>
           </div>
 

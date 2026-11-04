@@ -82,7 +82,6 @@ const DELETED_DOCS_KEY = 'gs_firestore_deleted_docs_v1';
 const STATIC_SEED_COLLECTION_NAMES = [
   'perform_kpi_masters',
   'perform_intern_roadmaps',
-  'showup_policy',
 ];
 
 const ALL_COLLECTION_NAMES = [
