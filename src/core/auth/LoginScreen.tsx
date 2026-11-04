@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { Building2, Lock, Mail, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Building2, Lock, Mail, ArrowRight, AlertCircle } from 'lucide-react';
 import { AuthEngine, normalizeIdentifier } from '../firebase/firebaseConfig';
-import { DEFAULT_ADMIN_PASSWORD, SEED_ADMIN_EMPLOYEE } from '../seedData';
 import { Button } from '../components/DesignSystem';
 
 // ============================================================================
@@ -124,34 +123,6 @@ export const LoginScreen: React.FC = () => {
           >
             {loading ? 'Authenticating Session...' : 'Sign In to Workspace'}
           </Button>
-
-          {/* Bootstrap Admin Reference Notice */}
-          <div className="pt-4 border-t border-neutral-200">
-            <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-lg text-xs text-neutral-600 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-neutral-800 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  Pre-Seeded Bootstrap Admin (EMP-001)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIdentifier(SEED_ADMIN_EMPLOYEE.email);
-                    setPassword(DEFAULT_ADMIN_PASSWORD);
-                  }}
-                  className="text-[11px] font-bold text-sky-700 hover:underline cursor-pointer"
-                >
-                  Fill Admin Credentials
-                </button>
-              </div>
-              <div className="font-mono text-[11px] text-neutral-600">
-                Email: {SEED_ADMIN_EMPLOYEE.email}
-              </div>
-              <div className="font-mono text-[11px] text-neutral-600">
-                Default Password: {DEFAULT_ADMIN_PASSWORD}
-              </div>
-            </div>
-          </div>
         </form>
       </div>
 

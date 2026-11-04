@@ -327,49 +327,36 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
           </div>
         )}
 
-        {/* Quick Persona / Hierarchy Level Preset Selector */}
+        {/* Quick Persona / Hierarchy Level Preset Selector (Strictly 6 Levels: Level 0 to Level 5) */}
         <div className="p-3.5 bg-neutral-50 border border-neutral-200 rounded-xl">
           <div className="text-xs font-bold text-neutral-800 mb-2">
-            Corporate Hierarchy Level & Role Quick-Preset (Levels 0 to 5)
+            Corporate Hierarchy Level Quick-Selector (6 Levels: Level 0 to Level 5)
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             <button
               type="button"
               onClick={() => handleRoleLevelPreset('CEO', 5)}
               className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
-                role === 'CEO' && level === 5
-                  ? 'bg-neutral-900 text-white border-neutral-900'
+                level === 5
+                  ? 'bg-sky-600 text-white border-sky-600'
                   : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
               }`}
             >
-              <div className="font-bold">Level 5 — CEO</div>
-              <div className="text-[10px] opacity-75">Executive Calibration & Release</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleRoleLevelPreset('Advisor', 5)}
-              className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
-                role === 'Advisor' && level === 5
-                  ? 'bg-neutral-900 text-white border-neutral-900'
-                  : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
-              }`}
-            >
-              <div className="font-bold">Level 5 — Advisor</div>
-              <div className="text-[10px] opacity-75">Strategic & CRM Visibility</div>
+              <div className="font-bold">Level 5 — Executive Leadership</div>
+              <div className="text-[10px] opacity-80">CEO / Advisor / Admin</div>
             </button>
 
             <button
               type="button"
               onClick={() => handleRoleLevelPreset('Manager', 4)}
               className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
-                role === 'Manager' && level === 4
-                  ? 'bg-neutral-900 text-white border-neutral-900'
+                level === 4
+                  ? 'bg-sky-600 text-white border-sky-600'
                   : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
               }`}
             >
               <div className="font-bold">Level 4 — Manager</div>
-              <div className="text-[10px] opacity-75">Team Hub, Approvals & 1:1s</div>
+              <div className="text-[10px] opacity-80">Team Hub, Approvals & 1:1s</div>
             </button>
 
             <button
@@ -379,13 +366,13 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
                 setHasCrmAccess(true);
               }}
               className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
-                role === 'Employee' && level === 3
-                  ? 'bg-neutral-900 text-white border-neutral-900'
+                level === 3
+                  ? 'bg-sky-600 text-white border-sky-600'
                   : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
               }`}
             >
-              <div className="font-bold">Level 3 — Sr. Specialist</div>
-              <div className="text-[10px] opacity-75">15-KPI + Connect CRM Access</div>
+              <div className="font-bold">Level 3 — Senior Specialist</div>
+              <div className="text-[10px] opacity-80">15-KPI + Connect CRM Access</div>
             </button>
 
             <button
@@ -395,13 +382,29 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
                 setHasCrmAccess(false);
               }}
               className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
-                role === 'Employee' && (level === 2 || level === 1)
-                  ? 'bg-neutral-900 text-white border-neutral-900'
+                level === 2
+                  ? 'bg-sky-600 text-white border-sky-600'
                   : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
               }`}
             >
-              <div className="font-bold">Level 1–2 — Associate</div>
-              <div className="text-[10px] opacity-75">15-KPI Self-Service (No CRM)</div>
+              <div className="font-bold">Level 2 — Associate</div>
+              <div className="text-[10px] opacity-80">15-KPI Self-Service</div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                handleRoleLevelPreset('Employee', 1);
+                setHasCrmAccess(false);
+              }}
+              className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
+                level === 1
+                  ? 'bg-sky-600 text-white border-sky-600'
+                  : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
+              }`}
+            >
+              <div className="font-bold">Level 1 — Junior Associate</div>
+              <div className="text-[10px] opacity-80">15-KPI Entry Track</div>
             </button>
 
             <button
@@ -413,12 +416,12 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
               }}
               className={`px-3 py-2 text-left rounded-lg border text-xs transition-all cursor-pointer ${
                 level === 0
-                  ? 'bg-neutral-900 text-white border-neutral-900'
+                  ? 'bg-sky-600 text-white border-sky-600'
                   : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
               }`}
             >
               <div className="font-bold">Level 0 — Intern</div>
-              <div className="text-[10px] opacity-75">Roadmaps, OKRs & Discussions</div>
+              <div className="text-[10px] opacity-80">Roadmaps, OKRs & Discussions</div>
             </button>
           </div>
         </div>
