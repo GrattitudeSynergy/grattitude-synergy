@@ -28,7 +28,9 @@ lerna-debug.log*
 *.sln
 *.sw?
 
-# Environment variables
+# Environment variables & local server database state
 .env
 .env.*
 !.env.example
+central-cloud-db.json
+

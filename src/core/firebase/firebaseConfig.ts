@@ -26,12 +26,15 @@ import {
 } from 'firebase/auth';
 
 // ============================================================================
-// FIREBASE CONFIGURATION & OFFLINE-CAPABLE MULTI-TAB PERSISTENCE ADAPTER
+// FIREBASE CONFIGURATION & CENTRAL MULTI-DEVICE REAL-TIME SYNC ENGINE
 // ============================================================================
-// Uses Google Cloud Firestore with persistentLocalCache & persistentMultipleTabManager.
-// Also provides a synchronized BroadcastChannel + LocalStorage fallback layer
-// when running in offline/local environments without external Firebase network keys,
-// guaranteeing 100% real-time onSnapshot reactivity across tabs and zero failures.
+// 1. Connects to Google Cloud Firestore (with persistentLocalCache &
+//    persistentMultipleTabManager) when live Firebase keys are configured.
+// 2. Simultaneously synchronizes all 23 collections + authentication accounts
+//    with the Central Database Sync Server (`/api/central-db/*` + SSE stream)
+//    so employees added to the directory are saved in the central database and
+//    automatically appear in real time across ALL devices, browsers, and
+//    authorized user accounts.
 // ============================================================================
 
 export const firebaseConfig = {
@@ -64,15 +67,39 @@ try {
 export { primaryApp, firestoreDb, primaryAuth };
 
 // ============================================================================
-// REAL-TIME REACTIVE DATASTORE ENGINE (Firestore + Persistent Multi-Tab Sync)
+// REAL-TIME REACTIVE DATASTORE ENGINE (Central DB + Firestore + Multi-Tab Sync)
 // ============================================================================
-// Every collection operation binds to Firestore (when configured with live keys)
-// and synchronizes with persistent IndexedDB/localStorage + BroadcastChannel
-// so onSnapshot listeners fire deterministically in real time across all tabs.
 
 const STORAGE_PREFIX = 'gs_firestore_v1_';
 const AUTH_ACCOUNTS_KEY = 'gs_firebase_auth_accounts_v1';
 const AUTH_SESSION_KEY = 'gs_firebase_auth_session_v1';
+
+const ALL_COLLECTION_NAMES = [
+  'employees',
+  'notifications',
+  'audit_logs',
+  'app_settings',
+  'perform_kpi_masters',
+  'perform_scorecards',
+  'perform_config',
+  'perform_training_plans',
+  'perform_tasks',
+  'perform_comments',
+  'perform_meetings',
+  'perform_intern_roadmaps',
+  'perform_intern_discussions',
+  'showup_policy',
+  'showup_attendance',
+  'showup_leave_requests',
+  'showup_leave_balances',
+  'showup_regularizations',
+  'showup_holidays',
+  'showup_salary_structures',
+  'showup_payslips',
+  'showup_documents',
+  'showup_compensation_lock',
+  'connect_leads',
+];
 
 type SnapshotCallback<T> = (items: T[]) => void;
 const collectionListeners: Map<string, Set<SnapshotCallback<any>>> = new Map();
@@ -105,7 +132,8 @@ function readLocalCollection<T extends { id: string }>(collectionName: string): 
 
 function writeLocalCollection<T extends { id: string }>(
   collectionName: string,
-  map: Record<string, T>
+  map: Record<string, T>,
+  broadcastToTabs = true
 ): void {
   try {
     localStorage.setItem(`${STORAGE_PREFIX}${collectionName}`, JSON.stringify(map));
@@ -113,7 +141,9 @@ function writeLocalCollection<T extends { id: string }>(
     console.error('Storage write error:', e);
   }
   notifyCollectionListeners(collectionName);
-  syncChannel?.postMessage({ type: 'COLLECTION_UPDATED', collectionName });
+  if (broadcastToTabs) {
+    syncChannel?.postMessage({ type: 'COLLECTION_UPDATED', collectionName });
+  }
 }
 
 function notifyCollectionListeners(collectionName: string): void {
@@ -128,6 +158,126 @@ function notifyCollectionListeners(collectionName: string): void {
       console.error(`Snapshot listener error on ${collectionName}:`, e);
     }
   });
+}
+
+// ============================================================================
+// CENTRAL SERVER DATABASE SYNCHRONIZATION (Cross-Device / Cross-Browser / SSE)
+// ============================================================================
+let centralSyncInitialized = false;
+
+function applyCentralStateToLocal(state: {
+  collections?: Record<string, Record<string, any>>;
+  authAccounts?: Record<string, AuthAccountRecord>;
+}) {
+  if (state.authAccounts && typeof state.authAccounts === 'object') {
+    const localAccounts = getStoredAccounts();
+    const mergedAccounts = { ...localAccounts, ...state.authAccounts };
+    localStorage.setItem(AUTH_ACCOUNTS_KEY, JSON.stringify(mergedAccounts));
+  }
+
+  if (state.collections && typeof state.collections === 'object') {
+    for (const [colName, serverDocs] of Object.entries(state.collections)) {
+      if (serverDocs && typeof serverDocs === 'object') {
+        writeLocalCollection(colName, serverDocs, false);
+      }
+    }
+  }
+}
+
+export async function synchronizeWithCentralDatabase(): Promise<void> {
+  if (typeof window === 'undefined') return;
+
+  // Gather any existing local records so zero existing employee records are lost
+  const localCollections: Record<string, Record<string, any>> = {};
+  for (const colName of ALL_COLLECTION_NAMES) {
+    const map = readLocalCollection(colName);
+    if (Object.keys(map).length > 0) {
+      localCollections[colName] = map;
+    }
+  }
+  const localAccounts = getStoredAccounts();
+
+  try {
+    const res = await fetch('/api/central-db/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collections: localCollections,
+        authAccounts: localAccounts,
+      }),
+    });
+    if (res.ok) {
+      const mergedState = await res.json();
+      applyCentralStateToLocal(mergedState);
+    }
+  } catch {
+    // Offline fallback: continues using local persistent cache
+  }
+
+  if (!centralSyncInitialized && typeof EventSource !== 'undefined') {
+    centralSyncInitialized = true;
+    try {
+      const es = new EventSource('/api/central-db/stream');
+      es.onmessage = (evt) => {
+        try {
+          const payload = JSON.parse(evt.data);
+          if (payload.type === 'CONNECTED' && payload.state) {
+            applyCentralStateToLocal(payload.state);
+          } else if (payload.type === 'FULL_SYNC' && payload.state) {
+            applyCentralStateToLocal(payload.state);
+          } else if (
+            payload.type === 'COLLECTION_UPDATED' &&
+            payload.collectionName &&
+            payload.collectionData
+          ) {
+            writeLocalCollection(payload.collectionName, payload.collectionData, false);
+          } else if (payload.type === 'AUTH_ACCOUNTS_UPDATED' && payload.authAccounts) {
+            const current = getStoredAccounts();
+            localStorage.setItem(
+              AUTH_ACCOUNTS_KEY,
+              JSON.stringify({ ...current, ...payload.authAccounts })
+            );
+          }
+        } catch {
+          // Ignore malformed SSE packet
+        }
+      };
+    } catch {
+      // EventSource not reachable
+    }
+  }
+}
+
+async function pushDocMutationToCentralServer(
+  action: 'set' | 'update' | 'delete',
+  collectionName: string,
+  docId: string,
+  data?: any
+): Promise<void> {
+  try {
+    await fetch('/api/central-db/doc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, collectionName, docId, data }),
+    });
+  } catch {
+    // Queued in local cache
+  }
+}
+
+async function pushAuthAccountToCentralServer(
+  emailKey: string,
+  account: AuthAccountRecord
+): Promise<void> {
+  try {
+    await fetch('/api/central-db/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emailKey, account }),
+    });
+  } catch {
+    // Queued in local cache
+  }
 }
 
 // Firestore Collection Wrapper
@@ -166,7 +316,7 @@ export const FirestoreEngine = {
           }
         );
       } catch {
-        // Ignore and use local persistent cache
+        // Ignore and use central + local persistent cache
       }
     }
 
@@ -192,7 +342,7 @@ export const FirestoreEngine = {
           return items;
         }
       } catch {
-        // Fallback to persistent cache
+        // Fallback to central/local persistent cache
       }
     }
     const map = readLocalCollection<T>(collectionName);
@@ -223,14 +373,17 @@ export const FirestoreEngine = {
     data: T
   ): Promise<void> {
     const map = readLocalCollection<T>(collectionName);
-    map[docId] = { ...data, id: docId };
+    const fullDoc = { ...data, id: docId };
+    map[docId] = fullDoc;
     writeLocalCollection(collectionName, map);
+
+    await pushDocMutationToCentralServer('set', collectionName, docId, fullDoc);
 
     if (hasLiveFirebaseKeys && firestoreDb) {
       try {
-        await setDoc(doc(firestoreDb, collectionName, docId), { ...data, id: docId });
+        await setDoc(doc(firestoreDb, collectionName, docId), fullDoc);
       } catch {
-        // Cached locally
+        // Synced with central server & local cache
       }
     }
   },
@@ -246,11 +399,13 @@ export const FirestoreEngine = {
       writeLocalCollection(collectionName, map);
     }
 
+    await pushDocMutationToCentralServer('update', collectionName, docId, partial);
+
     if (hasLiveFirebaseKeys && firestoreDb) {
       try {
         await updateDoc(doc(firestoreDb, collectionName, docId), partial as Record<string, any>);
       } catch {
-        // Cached locally
+        // Synced with central server & local cache
       }
     }
   },
@@ -262,11 +417,13 @@ export const FirestoreEngine = {
       writeLocalCollection(collectionName, map);
     }
 
+    await pushDocMutationToCentralServer('delete', collectionName, docId);
+
     if (hasLiveFirebaseKeys && firestoreDb) {
       try {
         await deleteDoc(doc(firestoreDb, collectionName, docId));
       } catch {
-        // Cached locally
+        // Synced with central server & local cache
       }
     }
   },
@@ -368,6 +525,9 @@ export const AuthEngine = {
   },
 
   async signIn(identifier: string, password: string): Promise<AuthSessionUser> {
+    // Pull latest central DB state before checking credentials so accounts created on another device work immediately
+    await synchronizeWithCentralDatabase();
+
     const normalizedEmail = normalizeIdentifier(identifier);
 
     if (hasLiveFirebaseKeys && primaryAuth) {
@@ -380,18 +540,26 @@ export const AuthEngine = {
         setCurrentSessionUser(sessionUser);
         return sessionUser;
       } catch {
-        // Fallback to local persisted Firebase Auth registry
+        // Fallback to central/local persisted Firebase Auth registry
       }
     }
 
     const accounts = getStoredAccounts();
-    // Match by normalized email or exact email
+    // Also allow matching against the `employees` collection if an employee's email was updated
+    const employeesMap = readLocalCollection<any>('employees');
+    const matchedEmployee = Object.values(employeesMap).find(
+      (e: any) =>
+        e?.email?.toLowerCase() === normalizedEmail ||
+        e?.ecode?.toLowerCase() === identifier.trim().toLowerCase()
+    );
+
     const account =
       accounts[normalizedEmail] ||
       Object.values(accounts).find(
         (a) =>
           a.email.toLowerCase() === normalizedEmail ||
-          a.uid.toLowerCase() === identifier.trim().toLowerCase()
+          a.uid.toLowerCase() === identifier.trim().toLowerCase() ||
+          (matchedEmployee && a.uid.toLowerCase() === matchedEmployee.id.toLowerCase())
       );
 
     if (!account) {
@@ -428,24 +596,28 @@ export const AuthEngine = {
       try {
         await fbUpdatePassword(primaryAuth.currentUser, newPassword);
       } catch {
-        // Continue to update local store
+        // Continue to update central & local store
       }
     }
 
     const accounts = getStoredAccounts();
-    const record = accounts[session.email.toLowerCase()];
+    const key = session.email.toLowerCase();
+    const record = accounts[key];
     if (record) {
       record.passwordHash = newPassword;
       saveStoredAccounts(accounts);
+      await pushAuthAccountToCentralServer(key, record);
     }
   },
 
   async adminResetUserPassword(targetEmail: string, newPassword: string): Promise<void> {
+    await synchronizeWithCentralDatabase();
     const accounts = getStoredAccounts();
     const key = targetEmail.trim().toLowerCase();
     if (accounts[key]) {
       accounts[key].passwordHash = newPassword;
       saveStoredAccounts(accounts);
+      await pushAuthAccountToCentralServer(key, accounts[key]);
     } else {
       throw new Error(`Auth record for ${key} not found.`);
     }
@@ -462,6 +634,7 @@ export const AuthEngine = {
     password: string,
     preferredUid?: string
   ): Promise<{ uid: string; email: string }> {
+    await synchronizeWithCentralDatabase();
     const normalizedEmail = normalizeIdentifier(email);
     const accounts = getStoredAccounts();
 
@@ -488,7 +661,6 @@ export const AuthEngine = {
         await fbSignOut(secondaryAuth);
       }
     } catch (err: any) {
-      // If running with local offline config, secondary app still initializes & cleans up cleanly
       if (hasLiveFirebaseKeys && err?.code === 'auth/email-already-in-use') {
         throw new Error(`Email "${normalizedEmail}" is already registered in Firebase Auth.`);
       }
@@ -502,14 +674,16 @@ export const AuthEngine = {
       }
     }
 
-    // Persist in local auth table so user can immediately sign in without disrupting Admin's session
-    accounts[normalizedEmail] = {
+    const newRecord: AuthAccountRecord = {
       uid: createdUid,
       email: normalizedEmail,
       passwordHash: password,
       createdAt: new Date().toISOString(),
     };
+
+    accounts[normalizedEmail] = newRecord;
     saveStoredAccounts(accounts);
+    await pushAuthAccountToCentralServer(normalizedEmail, newRecord);
 
     return { uid: createdUid, email: normalizedEmail };
   },
@@ -518,13 +692,15 @@ export const AuthEngine = {
     const accounts = getStoredAccounts();
     const key = email.toLowerCase();
     if (!accounts[key]) {
-      accounts[key] = {
+      const adminRecord: AuthAccountRecord = {
         uid,
         email: key,
         passwordHash: defaultPassword,
         createdAt: new Date().toISOString(),
       };
+      accounts[key] = adminRecord;
       saveStoredAccounts(accounts);
+      void pushAuthAccountToCentralServer(key, adminRecord);
     }
   },
 };

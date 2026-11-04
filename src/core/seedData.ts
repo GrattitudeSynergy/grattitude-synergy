@@ -1,4 +1,8 @@
-import { FirestoreEngine, AuthEngine } from './firebase/firebaseConfig';
+import {
+  FirestoreEngine,
+  AuthEngine,
+  synchronizeWithCentralDatabase,
+} from './firebase/firebaseConfig';
 import { KPI_MASTER_SEED } from '../modules/perform/kpiMasterSeed';
 import type {
   Employee,
@@ -475,6 +479,10 @@ export const SEED_DEFAULT_FORM_FIELDS: DynamicFormField[] = [
 const BOOTSTRAP_FLAG_KEY = 'gs_enterprise_bootstrapped_v1';
 
 export async function initializeSeedData(): Promise<void> {
+  // 0. Synchronize with Central Database Server first so any existing employee records
+  //    in this browser are merged to the central server and all central records are pulled down.
+  await synchronizeWithCentralDatabase();
+
   // Always ensure the Admin Firebase Auth record exists so EMP-001 can sign in immediately
   AuthEngine.ensureBootstrapAdminAuth(
     SEED_ADMIN_EMPLOYEE.id,
@@ -561,4 +569,5 @@ export async function initializeSeedData(): Promise<void> {
   }
 
   localStorage.setItem(BOOTSTRAP_FLAG_KEY, 'true');
+  await synchronizeWithCentralDatabase();
 }

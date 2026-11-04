@@ -1,9 +1,255 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+// ============================================================================
+// CENTRAL REAL-TIME DATABASE SYNC SERVER PLUGIN (Multi-Device & Multi-Account)
+// ============================================================================
+// Persists all 23 Firestore collections + Auth accounts to a central server
+// datastore (`central-cloud-db.json`) and broadcasts updates over Server-Sent
+// Events (SSE) so every connected browser, device, and user account stays
+// synchronized in real time.
+
+interface CentralDatabaseState {
+  collections: Record<string, Record<string, any>>;
+  authAccounts: Record<string, any>;
+  updatedAt: string;
+}
+
+function createCentralDatabaseSyncPlugin(): Plugin {
+  const dbFilePath = path.resolve(process.cwd(), 'central-cloud-db.json');
+  const sseClients = new Set<ServerResponse>();
+
+  const loadDb = (): CentralDatabaseState => {
+    try {
+      if (fs.existsSync(dbFilePath)) {
+        const raw = fs.readFileSync(dbFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            collections: parsed.collections || {},
+            authAccounts: parsed.authAccounts || {},
+            updatedAt: parsed.updatedAt || new Date().toISOString(),
+          };
+        }
+      }
+    } catch (e) {
+      console.error('Error reading central-cloud-db.json:', e);
+    }
+    return {
+      collections: {},
+      authAccounts: {},
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
+  const saveDb = (state: CentralDatabaseState) => {
+    try {
+      state.updatedAt = new Date().toISOString();
+      fs.writeFileSync(dbFilePath, JSON.stringify(state, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Error writing central-cloud-db.json:', e);
+    }
+  };
+
+  const broadcastEvent = (payload: Record<string, any>) => {
+    const message = `data: ${JSON.stringify(payload)}\n\n`;
+    sseClients.forEach((client) => {
+      try {
+        client.write(message);
+      } catch {
+        sseClients.delete(client);
+      }
+    });
+  };
+
+  const readJsonBody = (req: IncomingMessage): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        try {
+          resolve(body ? JSON.parse(body) : {});
+        } catch (err) {
+          reject(err);
+        }
+      });
+      req.on('error', reject);
+    });
+  };
+
+  const attachMiddleware = (middlewares: any) => {
+    middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+      const url = req.url || '';
+      if (!url.startsWith('/api/central-db')) {
+        return next();
+      }
+
+      // CORS headers for LAN / cross-device access
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
+      // 1. Server-Sent Events (SSE) Real-Time Stream
+      if (url.startsWith('/api/central-db/stream') && req.method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+        });
+        res.write(`data: ${JSON.stringify({ type: 'CONNECTED', state: loadDb() })}\n\n`);
+        sseClients.add(res);
+        req.on('close', () => {
+          sseClients.delete(res);
+        });
+        return;
+      }
+
+      // 2. Full State Fetch & Client-to-Server Merge
+      if (url.startsWith('/api/central-db/state') && req.method === 'GET') {
+        const state = loadDb();
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(state));
+        return;
+      }
+
+      // 3. Merge Local Browser Records into Central DB (Preserves existing employee records)
+      if (url.startsWith('/api/central-db/merge') && req.method === 'POST') {
+        try {
+          const body = await readJsonBody(req);
+          const state = loadDb();
+          const incomingCollections = body.collections || {};
+          const incomingAccounts = body.authAccounts || {};
+          const updatedCollections: string[] = [];
+
+          for (const [colName, docsMap] of Object.entries(incomingCollections)) {
+            if (!state.collections[colName]) {
+              state.collections[colName] = {};
+            }
+            for (const [docId, docData] of Object.entries(docsMap as Record<string, any>)) {
+              if (!state.collections[colName][docId]) {
+                state.collections[colName][docId] = docData;
+                if (!updatedCollections.includes(colName)) {
+                  updatedCollections.push(colName);
+                }
+              }
+            }
+          }
+
+          for (const [emailKey, accData] of Object.entries(incomingAccounts)) {
+            if (!state.authAccounts[emailKey]) {
+              state.authAccounts[emailKey] = accData;
+            }
+          }
+
+          saveDb(state);
+          if (updatedCollections.length > 0 || Object.keys(incomingAccounts).length > 0) {
+            broadcastEvent({
+              type: 'FULL_SYNC',
+              state,
+            });
+          }
+
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(state));
+        } catch (err: any) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: err?.message }));
+        }
+        return;
+      }
+
+      // 4. Document Upsert / Update / Delete
+      if (url.startsWith('/api/central-db/doc') && req.method === 'POST') {
+        try {
+          const body = await readJsonBody(req);
+          const { action, collectionName, docId, data } = body;
+          const state = loadDb();
+
+          if (!state.collections[collectionName]) {
+            state.collections[collectionName] = {};
+          }
+
+          if (action === 'set') {
+            state.collections[collectionName][docId] = { ...data, id: docId };
+          } else if (action === 'update') {
+            const existing = state.collections[collectionName][docId] || { id: docId };
+            state.collections[collectionName][docId] = {
+              ...existing,
+              ...data,
+              id: docId,
+            };
+          } else if (action === 'delete') {
+            delete state.collections[collectionName][docId];
+          }
+
+          saveDb(state);
+          broadcastEvent({
+            type: 'COLLECTION_UPDATED',
+            collectionName,
+            collectionData: state.collections[collectionName],
+          });
+
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err: any) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: err?.message }));
+        }
+        return;
+      }
+
+      // 5. Auth Account Upsert / Password Update
+      if (url.startsWith('/api/central-db/auth') && req.method === 'POST') {
+        try {
+          const body = await readJsonBody(req);
+          const { emailKey, account } = body;
+          const state = loadDb();
+          if (emailKey && account) {
+            state.authAccounts[emailKey.toLowerCase()] = account;
+            saveDb(state);
+            broadcastEvent({
+              type: 'AUTH_ACCOUNTS_UPDATED',
+              authAccounts: state.authAccounts,
+            });
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: true, authAccounts: state.authAccounts }));
+        } catch (err: any) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: err?.message }));
+        }
+        return;
+      }
+
+      next();
+    });
+  };
+
+  return {
+    name: 'central-cloud-db-sync',
+    configureServer(server) {
+      attachMiddleware(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      attachMiddleware(server.middlewares);
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), createCentralDatabaseSyncPlugin()],
   server: {
     port: 3000,
     host: '0.0.0.0',
