@@ -252,6 +252,15 @@ export const ShowUpModule: React.FC<{
       route: '/showup',
       actorName: currentEmployee.name,
     });
+    if (newReq.reportingManagerId !== 'EMP-001') {
+      await NotificationService.create({
+        recipientId: 'EMP-001',
+        title: 'New Leave Request Pending Approval',
+        message: `${currentEmployee.name} requested ${days} day(s) of ${leaveType} (${leaveStart} to ${leaveEnd}).`,
+        route: '/showup',
+        actorName: currentEmployee.name,
+      });
+    }
 
     showToast(
       'success',
@@ -266,6 +275,21 @@ export const ShowUpModule: React.FC<{
     req: ShowupLeaveRequest,
     decision: 'Approved' | 'Rejected'
   ) => {
+    if (
+      !PermissionsService.canManageLeaveOrRegularization(
+        currentEmployee,
+        req,
+        employees
+      )
+    ) {
+      showToast(
+        'error',
+        'Access Denied',
+        'Only the assigned Reporting Manager or Admin can review this leave request.'
+      );
+      return;
+    }
+
     await FirestoreEngine.updateDocument<ShowupLeaveRequest>(
       'showup_leave_requests',
       req.id,
@@ -305,6 +329,14 @@ export const ShowUpModule: React.FC<{
       });
     }
 
+    await NotificationService.create({
+      recipientId: req.employeeId,
+      title: `Leave Request ${decision}`,
+      message: `Your ${req.leaveType} request (${req.startDate} to ${req.endDate}) was ${decision.toLowerCase()} by ${currentEmployee.name}.`,
+      route: '/showup',
+      actorName: currentEmployee.name,
+    });
+
     await AuditService.log({
       action: `LEAVE_${decision.toUpperCase()}`,
       actor: currentEmployee,
@@ -336,6 +368,22 @@ export const ShowUpModule: React.FC<{
       createdAt: new Date().toISOString(),
     };
     await FirestoreEngine.setDocument('showup_regularizations', reg.id, reg);
+    await NotificationService.create({
+      recipientId: reg.reportingManagerId,
+      title: 'New Attendance Regularization Request',
+      message: `${currentEmployee.name} requested punch regularization for ${regDate} (${regPunchIn}–${regPunchOut}).`,
+      route: '/showup',
+      actorName: currentEmployee.name,
+    });
+    if (reg.reportingManagerId !== 'EMP-001') {
+      await NotificationService.create({
+        recipientId: 'EMP-001',
+        title: 'New Attendance Regularization Request',
+        message: `${currentEmployee.name} requested punch regularization for ${regDate} (${regPunchIn}–${regPunchOut}).`,
+        route: '/showup',
+        actorName: currentEmployee.name,
+      });
+    }
     showToast(
       'success',
       'Regularization Request Submitted',
@@ -349,6 +397,21 @@ export const ShowUpModule: React.FC<{
     reg: ShowupRegularization,
     decision: 'Approved' | 'Rejected'
   ) => {
+    if (
+      !PermissionsService.canManageLeaveOrRegularization(
+        currentEmployee,
+        reg,
+        employees
+      )
+    ) {
+      showToast(
+        'error',
+        'Access Denied',
+        'Only the assigned Reporting Manager or Admin can review this regularization request.'
+      );
+      return;
+    }
+
     await FirestoreEngine.updateDocument<ShowupRegularization>(
       'showup_regularizations',
       reg.id,
@@ -398,6 +461,14 @@ export const ShowUpModule: React.FC<{
       };
       await FirestoreEngine.setDocument('showup_attendance', attId, newAtt);
     }
+
+    await NotificationService.create({
+      recipientId: reg.employeeId,
+      title: `Regularization Request ${decision}`,
+      message: `Your attendance regularization for ${reg.date} (${reg.requestedPunchIn}–${reg.requestedPunchOut}) was ${decision.toLowerCase()} by ${currentEmployee.name}.`,
+      route: '/showup',
+      actorName: currentEmployee.name,
+    });
 
     await AuditService.log({
       action: `REGULARIZATION_${decision.toUpperCase()}`,
@@ -543,6 +614,61 @@ export const ShowUpModule: React.FC<{
       lockConfig
     );
 
+  // Strict RBAC Filtering: Requests are visible ONLY to the employee's Reporting Manager and Admin
+  // (plus the employee's own personal submission history)
+  const currentNormId = PermissionsService.normalizeEmpId(currentEmployee.id);
+  const currentNormEcode = PermissionsService.normalizeEmpId(
+    currentEmployee.ecode
+  );
+
+  const hasDirectReports = employees.some((e) => {
+    const mgrNorm = PermissionsService.normalizeEmpId(e.reportingManagerId);
+    return (
+      mgrNorm !== '' &&
+      (mgrNorm === currentNormId || mgrNorm === currentNormEcode)
+    );
+  });
+
+  const canAccessManagerApprovalQueue = isAdmin || hasDirectReports || isManager;
+
+  const approvalQueueLeaveRequests = leaveRequests.filter((req) =>
+    PermissionsService.canManageLeaveOrRegularization(
+      currentEmployee,
+      req,
+      employees
+    )
+  );
+
+  const myOwnLeaveRequests = leaveRequests.filter((req) => {
+    const reqNorm = PermissionsService.normalizeEmpId(req.employeeId);
+    return reqNorm === currentNormId || reqNorm === currentNormEcode;
+  });
+
+  const approvalQueueRegularizations = regularizations.filter((reg) =>
+    PermissionsService.canManageLeaveOrRegularization(
+      currentEmployee,
+      reg,
+      employees
+    )
+  );
+
+  const myOwnRegularizations = regularizations.filter((reg) => {
+    const regNorm = PermissionsService.normalizeEmpId(reg.employeeId);
+    return regNorm === currentNormId || regNorm === currentNormEcode;
+  });
+
+  const pendingLeaveBadgeCount = canAccessManagerApprovalQueue
+    ? approvalQueueLeaveRequests.filter((r) => r.status === 'Pending').length
+    : myOwnLeaveRequests.filter((r) => r.status === 'Pending').length;
+
+  const pendingRegBadgeCount = canAccessManagerApprovalQueue
+    ? approvalQueueRegularizations.filter((r) => r.status === 'Pending').length
+    : myOwnRegularizations.filter((r) => r.status === 'Pending').length;
+
+  const visibleDocumentsCount = documents.filter(
+    (d) => isAdmin || d.employeeId === currentEmployee.id
+  ).length;
+
   const tabs = [
     {
       id: 'attendance',
@@ -553,13 +679,13 @@ export const ShowUpModule: React.FC<{
       id: 'leaves',
       label: 'Leave Management & Collision Detector',
       icon: <Calendar className="w-3.5 h-3.5" />,
-      badge: leaveRequests.filter((r) => r.status === 'Pending').length,
+      badge: pendingLeaveBadgeCount,
     },
     {
       id: 'regularization',
       label: 'Regularization Queue',
       icon: <FileCheck className="w-3.5 h-3.5" />,
-      badge: regularizations.filter((r) => r.status === 'Pending').length,
+      badge: pendingRegBadgeCount,
     },
     {
       id: 'payroll',
@@ -570,7 +696,7 @@ export const ShowUpModule: React.FC<{
       id: 'vault',
       label: 'Document Vault',
       icon: <FolderLock className="w-3.5 h-3.5" />,
-      badge: documents.length,
+      badge: visibleDocumentsCount,
     },
     ...(isAdmin
       ? [
@@ -672,74 +798,78 @@ export const ShowUpModule: React.FC<{
             </div>
           </Card>
 
-          {/* Leave Requests & Manager Collision Detector */}
-          <Card
-            title="Leave Applications & Manager Collision Detector Queue"
-            subtitle="When approving a leave, automatically detects and alerts if another direct report has booked overlapping dates."
-          >
-            {leaveRequests.length === 0 ? (
-              <EmptyState
-                title="No Leave Requests Recorded"
-                description="Apply for leave above to test the 15-day EL notice validator and Manager Collision Detector."
-              />
-            ) : (
-              <Table
-                headers={[
-                  'Employee',
-                  'Leave Type',
-                  'Date Range & Days',
-                  'Reason',
-                  'Collision Detector Alert',
-                  'Status',
-                  ...(isManager ? ['Manager Actions'] : []),
-                ]}
-              >
-                {leaveRequests.map((req) => {
-                  const collisions = PolicyEngine.detectLeaveCollisions(
-                    req,
-                    leaveRequests
-                  );
-                  return (
-                    <tr key={req.id} className="hover:bg-neutral-50">
-                      <td className="px-4 py-3 text-xs font-bold text-neutral-900">
-                        {req.employeeName}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge variant="info">{req.leaveType}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-xs font-mono">
-                        {req.startDate} → {req.endDate} ({req.days}d)
-                      </td>
-                      <td className="px-4 py-3 text-xs text-neutral-600">
-                        {req.reason}
-                      </td>
-                      <td className="px-4 py-3">
-                        {collisions.length > 0 ? (
-                          <div className="p-2 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-900 flex items-start gap-1.5">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                            <div>
-                              <strong>Collision Alert:</strong> Overlaps with{' '}
-                              {collisions.map((c) => c.employeeName).join(', ')}
+          {/* Manager & Admin Approval Queue (Strictly visible ONLY to Reporting Manager & Admin) */}
+          {canAccessManagerApprovalQueue && (
+            <Card
+              title={
+                isAdmin
+                  ? 'Organization Leave Approval Queue & Collision Detector (Admin View)'
+                  : 'Direct Reports Leave Approval Queue & Collision Detector (Manager View)'
+              }
+              subtitle="Strictly restricted: Only leave requests from your direct reports (or all employees for Admin) are visible here."
+            >
+              {approvalQueueLeaveRequests.length === 0 ? (
+                <EmptyState
+                  title="No Direct-Report Leave Requests in Queue"
+                  description="Leave applications submitted by employees reporting to you will appear here for approval."
+                />
+              ) : (
+                <Table
+                  headers={[
+                    'Employee',
+                    'Leave Type',
+                    'Date Range & Days',
+                    'Reason',
+                    'Collision Detector Alert',
+                    'Status',
+                    'Manager / Admin Actions',
+                  ]}
+                >
+                  {approvalQueueLeaveRequests.map((req) => {
+                    const collisions = PolicyEngine.detectLeaveCollisions(
+                      req,
+                      approvalQueueLeaveRequests
+                    );
+                    return (
+                      <tr key={req.id} className="hover:bg-neutral-50">
+                        <td className="px-4 py-3 text-xs font-bold text-neutral-900">
+                          {req.employeeName}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant="info">{req.leaveType}</Badge>
+                        </td>
+                        <td className="px-4 py-3 text-xs font-mono">
+                          {req.startDate} → {req.endDate} ({req.days}d)
+                        </td>
+                        <td className="px-4 py-3 text-xs text-neutral-600">
+                          {req.reason}
+                        </td>
+                        <td className="px-4 py-3">
+                          {collisions.length > 0 ? (
+                            <div className="p-2 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-900 flex items-start gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                              <div>
+                                <strong>Collision Alert:</strong> Overlaps with{' '}
+                                {collisions.map((c) => c.employeeName).join(', ')}
+                              </div>
                             </div>
-                          </div>
-                        ) : (
-                          <Badge variant="success">No Team Overlap</Badge>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge
-                          variant={
-                            req.status === 'Approved'
-                              ? 'success'
-                              : req.status === 'Rejected'
-                              ? 'danger'
-                              : 'warning'
-                          }
-                        >
-                          {req.status}
-                        </Badge>
-                      </td>
-                      {isManager && (
+                          ) : (
+                            <Badge variant="success">No Team Overlap</Badge>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge
+                            variant={
+                              req.status === 'Approved'
+                                ? 'success'
+                                : req.status === 'Rejected'
+                                ? 'danger'
+                                : 'warning'
+                            }
+                          >
+                            {req.status}
+                          </Badge>
+                        </td>
                         <td className="px-4 py-3">
                           {req.status === 'Pending' ? (
                             <div className="flex items-center gap-1.5">
@@ -768,10 +898,65 @@ export const ShowUpModule: React.FC<{
                             </span>
                           )}
                         </td>
-                      )}
-                    </tr>
-                  );
-                })}
+                      </tr>
+                    );
+                  })}
+                </Table>
+              )}
+            </Card>
+          )}
+
+          {/* Personal Leave Requests Submitted by Current Employee */}
+          <Card
+            title="My Submitted Leave Applications"
+            subtitle="Your personal leave requests sent to your Reporting Manager and Admin."
+          >
+            {myOwnLeaveRequests.length === 0 ? (
+              <EmptyState
+                title="You Have Not Submitted Any Leave Requests"
+                description="Click 'Apply for Leave' above to submit a leave request to your Reporting Manager."
+              />
+            ) : (
+              <Table
+                headers={[
+                  'Leave Type',
+                  'Date Range & Days',
+                  'Reason',
+                  'Status',
+                  'Review Details',
+                ]}
+              >
+                {myOwnLeaveRequests.map((req) => (
+                  <tr key={req.id} className="hover:bg-neutral-50">
+                    <td className="px-4 py-3">
+                      <Badge variant="info">{req.leaveType}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-xs font-mono">
+                      {req.startDate} → {req.endDate} ({req.days}d)
+                    </td>
+                    <td className="px-4 py-3 text-xs text-neutral-600">
+                      {req.reason}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge
+                        variant={
+                          req.status === 'Approved'
+                            ? 'success'
+                            : req.status === 'Rejected'
+                            ? 'danger'
+                            : 'warning'
+                        }
+                      >
+                        {req.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-neutral-500">
+                      {req.status === 'Pending'
+                        ? 'Pending Manager / Admin Approval'
+                        : `Reviewed by ${req.reviewedBy || 'Manager'}`}
+                    </td>
+                  </tr>
+                ))}
               </Table>
             )}
           </Card>
@@ -780,92 +965,168 @@ export const ShowUpModule: React.FC<{
 
       {/* TAB 3: REGULARIZATION REQUEST FLOW */}
       {activeTab === 'regularization' && (
-        <Card
-          title="Attendance Regularization Request & Approval Queue"
-          subtitle="Request punch corrections for missed punches or technical glitches with manager sign-off."
-          action={
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Plus className="w-4 h-4" />}
-              onClick={() => setRegModalOpen(true)}
+        <div className="space-y-5">
+          {/* Manager & Admin Regularization Approval Queue (Strictly visible ONLY to Reporting Manager & Admin) */}
+          {canAccessManagerApprovalQueue && (
+            <Card
+              title={
+                isAdmin
+                  ? 'Organization Regularization Approval Queue (Admin View)'
+                  : 'Direct Reports Regularization Approval Queue (Manager View)'
+              }
+              subtitle="Strictly restricted: Only attendance regularization requests from your direct reports (or all employees for Admin) are visible here."
+              action={
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus className="w-4 h-4" />}
+                  onClick={() => setRegModalOpen(true)}
+                >
+                  Request Punch Regularization
+                </Button>
+              }
             >
-              Request Punch Regularization
-            </Button>
-          }
-        >
-          {regularizations.length === 0 ? (
-            <EmptyState
-              title="No Regularization Requests Pending"
-              description="Employees can submit missed-punch corrections here for manager approval."
-            />
-          ) : (
-            <Table
-              headers={[
-                'Employee',
-                'Target Date',
-                'Requested In / Out',
-                'Reason',
-                'Status',
-                ...(isManager ? ['Approval'] : []),
-              ]}
-            >
-              {regularizations.map((reg) => (
-                <tr key={reg.id}>
-                  <td className="px-4 py-3 text-xs font-bold">
-                    {reg.employeeName}
-                  </td>
-                  <td className="px-4 py-3 text-xs font-mono">{reg.date}</td>
-                  <td className="px-4 py-3 text-xs font-mono">
-                    {reg.requestedPunchIn} – {reg.requestedPunchOut}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-neutral-600">
-                    {reg.reason}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge
-                      variant={
-                        reg.status === 'Approved'
-                          ? 'success'
-                          : reg.status === 'Rejected'
-                          ? 'danger'
-                          : 'warning'
-                      }
-                    >
-                      {reg.status}
-                    </Badge>
-                  </td>
-                  {isManager && (
-                    <td className="px-4 py-3">
-                      {reg.status === 'Pending' && (
-                        <div className="flex items-center gap-1.5">
-                          <Button
-                            size="xs"
-                            variant="success"
-                            onClick={() =>
-                              handleReviewRegularization(reg, 'Approved')
-                            }
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="danger"
-                            onClick={() =>
-                              handleReviewRegularization(reg, 'Rejected')
-                            }
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </Table>
+              {approvalQueueRegularizations.length === 0 ? (
+                <EmptyState
+                  title="No Direct-Report Regularization Requests Pending"
+                  description="Missed-punch correction requests submitted by employees reporting to you will appear here."
+                />
+              ) : (
+                <Table
+                  headers={[
+                    'Employee',
+                    'Target Date',
+                    'Requested In / Out',
+                    'Reason',
+                    'Status',
+                    'Manager / Admin Approval',
+                  ]}
+                >
+                  {approvalQueueRegularizations.map((reg) => (
+                    <tr key={reg.id} className="hover:bg-neutral-50">
+                      <td className="px-4 py-3 text-xs font-bold">
+                        {reg.employeeName}
+                      </td>
+                      <td className="px-4 py-3 text-xs font-mono">{reg.date}</td>
+                      <td className="px-4 py-3 text-xs font-mono">
+                        {reg.requestedPunchIn} – {reg.requestedPunchOut}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-neutral-600">
+                        {reg.reason}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge
+                          variant={
+                            reg.status === 'Approved'
+                              ? 'success'
+                              : reg.status === 'Rejected'
+                              ? 'danger'
+                              : 'warning'
+                          }
+                        >
+                          {reg.status}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        {reg.status === 'Pending' ? (
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              size="xs"
+                              variant="success"
+                              onClick={() =>
+                                handleReviewRegularization(reg, 'Approved')
+                              }
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="danger"
+                              onClick={() =>
+                                handleReviewRegularization(reg, 'Rejected')
+                              }
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-neutral-400">
+                            Reviewed by {reg.reviewedBy || 'Manager'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
+            </Card>
           )}
-        </Card>
+
+          {/* Personal Regularization Requests Submitted by Current Employee */}
+          <Card
+            title="My Submitted Regularization Requests"
+            subtitle="Your personal punch correction requests sent to your Reporting Manager and Admin."
+            action={
+              !canAccessManagerApprovalQueue ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus className="w-4 h-4" />}
+                  onClick={() => setRegModalOpen(true)}
+                >
+                  Request Punch Regularization
+                </Button>
+              ) : undefined
+            }
+          >
+            {myOwnRegularizations.length === 0 ? (
+              <EmptyState
+                title="You Have Not Submitted Any Regularization Requests"
+                description="Submit a missed-punch correction request to send it to your Reporting Manager and Admin for approval."
+              />
+            ) : (
+              <Table
+                headers={[
+                  'Target Date',
+                  'Requested In / Out',
+                  'Reason',
+                  'Status',
+                  'Review Details',
+                ]}
+              >
+                {myOwnRegularizations.map((reg) => (
+                  <tr key={reg.id} className="hover:bg-neutral-50">
+                    <td className="px-4 py-3 text-xs font-mono">{reg.date}</td>
+                    <td className="px-4 py-3 text-xs font-mono">
+                      {reg.requestedPunchIn} – {reg.requestedPunchOut}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-neutral-600">
+                      {reg.reason}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge
+                        variant={
+                          reg.status === 'Approved'
+                            ? 'success'
+                            : reg.status === 'Rejected'
+                            ? 'danger'
+                            : 'warning'
+                        }
+                      >
+                        {reg.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-neutral-500">
+                      {reg.status === 'Pending'
+                        ? 'Pending Manager / Admin Approval'
+                        : `Reviewed by ${reg.reviewedBy || 'Manager'}`}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* TAB 4: STATUTORY INDIAN CTC PAYROLL ENGINE */}

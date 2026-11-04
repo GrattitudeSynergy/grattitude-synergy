@@ -23,6 +23,151 @@ interface CentralDatabaseState {
 function createCentralDatabaseSyncPlugin(): Plugin {
   const dbFilePath = path.resolve(process.cwd(), 'central-cloud-db.json');
   const sseClients = new Set<ServerResponse>();
+  const rlsProtectedCollections = new Set(['showup_leave_requests', 'showup_regularizations']);
+
+  const normalizeEmpId = (id?: string): string =>
+    (id || '').trim().toUpperCase().replace(/^#/, '');
+
+  const retrofitRequestDoc = (docData: any, employeesMap: Record<string, any>) => {
+    if (!docData || typeof docData !== 'object') return docData;
+    let rawEmpId = docData.employeeId || '';
+    if (rawEmpId === 'EMP-002') rawEmpId = 'GSL000';
+    const reqEmpNorm = normalizeEmpId(rawEmpId);
+    const reqNameLower = (docData.employeeName || '').trim().toLowerCase();
+
+    const matchedEmp = Object.values(employeesMap || {}).find((e: any) => {
+      if (!e) return false;
+      return (
+        (reqEmpNorm &&
+          (normalizeEmpId(e.id) === reqEmpNorm || normalizeEmpId(e.ecode) === reqEmpNorm)) ||
+        (reqNameLower && (e.name || '').trim().toLowerCase() === reqNameLower)
+      );
+    });
+
+    const canonicalEmpId = matchedEmp ? matchedEmp.id : rawEmpId;
+    const canonicalMgrId =
+      (matchedEmp && matchedEmp.reportingManagerId) || docData.reportingManagerId || 'EMP-001';
+
+    return {
+      ...docData,
+      employeeId: canonicalEmpId,
+      employeeName: matchedEmp ? matchedEmp.name : docData.employeeName,
+      reportingManagerId: canonicalMgrId,
+      visibilityScope: 'RESTRICTED_OWNER_MANAGER_ADMIN',
+      allowedViewerIds: Array.from(
+        new Set([canonicalEmpId, canonicalMgrId, 'EMP-001'].filter(Boolean))
+      ),
+    };
+  };
+
+  const enforceServerRequestAclMigration = (state: CentralDatabaseState): CentralDatabaseState => {
+    const employeesMap = state.collections?.employees || {};
+    for (const colName of rlsProtectedCollections) {
+      const colMap = state.collections?.[colName];
+      if (!colMap || typeof colMap !== 'object') continue;
+      for (const [docId, docData] of Object.entries(colMap)) {
+        if (!docData || docData.employeeId === 'GSL0000') {
+          delete colMap[docId];
+          continue;
+        }
+        colMap[docId] = retrofitRequestDoc(docData, employeesMap);
+      }
+    }
+    return state;
+  };
+
+  const canCallerViewRequest = (
+    docData: any,
+    callerUid: string,
+    callerEmail: string,
+    employeesMap: Record<string, any>
+  ): boolean => {
+    if (!callerUid && !callerEmail) return false;
+    const callerUidNorm = normalizeEmpId(callerUid);
+    const callerEmailLower = (callerEmail || '').trim().toLowerCase();
+
+    const viewerEmp = Object.values(employeesMap || {}).find((e: any) => {
+      if (!e) return false;
+      return (
+        (callerUidNorm &&
+          (normalizeEmpId(e.id) === callerUidNorm ||
+            normalizeEmpId(e.ecode) === callerUidNorm)) ||
+        (callerEmailLower && (e.email || '').trim().toLowerCase() === callerEmailLower)
+      );
+    });
+
+    // 3. Admin: Can view all employees' regularization and leave requests
+    if (
+      callerUidNorm === 'EMP-001' ||
+      callerEmailLower === 'grattitudesynergyllp@gmail.com' ||
+      viewerEmp?.role === 'Admin'
+    ) {
+      return true;
+    }
+
+    const sanitized = retrofitRequestDoc(docData, employeesMap);
+    const reqEmpNorm = normalizeEmpId(sanitized.employeeId);
+    const reqMgrNorm = normalizeEmpId(sanitized.reportingManagerId);
+    const viewerIdNorm = viewerEmp ? normalizeEmpId(viewerEmp.id) : callerUidNorm;
+    const viewerEcodeNorm = viewerEmp ? normalizeEmpId(viewerEmp.ecode) : callerUidNorm;
+
+    // 1. Employee: Can view only their own regularization and leave requests
+    if (
+      reqEmpNorm &&
+      (reqEmpNorm === viewerIdNorm ||
+        reqEmpNorm === viewerEcodeNorm ||
+        reqEmpNorm === callerUidNorm)
+    ) {
+      return true;
+    }
+
+    // 2. Reporting Manager: Can view requests submitted by employees reporting to them
+    if (
+      reqMgrNorm &&
+      (reqMgrNorm === viewerIdNorm ||
+        reqMgrNorm === viewerEcodeNorm ||
+        reqMgrNorm === callerUidNorm)
+    ) {
+      return true;
+    }
+
+    return false;
+  };
+
+  const scopeStateForCaller = (
+    state: CentralDatabaseState,
+    callerUid: string,
+    callerEmail: string
+  ): CentralDatabaseState => {
+    if (!callerUid && !callerEmail) {
+      return {
+        ...state,
+        collections: {
+          ...state.collections,
+          showup_leave_requests: {},
+          showup_regularizations: {},
+        },
+      };
+    }
+    const employeesMap = state.collections?.employees || {};
+    const scopedCollections = { ...state.collections };
+
+    for (const colName of rlsProtectedCollections) {
+      const rawCol = state.collections?.[colName] || {};
+      const filteredCol: Record<string, any> = {};
+      for (const [docId, docData] of Object.entries(rawCol)) {
+        if (canCallerViewRequest(docData, callerUid, callerEmail, employeesMap)) {
+          filteredCol[docId] = docData;
+        }
+      }
+      scopedCollections[colName] = filteredCol;
+    }
+
+    return {
+      ...state,
+      collections: scopedCollections,
+    };
+  };
 
   const loadDb = (): CentralDatabaseState => {
     try {
@@ -30,12 +175,12 @@ function createCentralDatabaseSyncPlugin(): Plugin {
         const raw = fs.readFileSync(dbFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-          return {
+          return enforceServerRequestAclMigration({
             collections: parsed.collections || {},
             authAccounts: parsed.authAccounts || {},
             deletedDocIds: parsed.deletedDocIds || {},
             updatedAt: parsed.updatedAt || new Date().toISOString(),
-          };
+          });
         }
       }
     } catch (e) {
@@ -51,6 +196,7 @@ function createCentralDatabaseSyncPlugin(): Plugin {
 
   const saveDb = (state: CentralDatabaseState) => {
     try {
+      enforceServerRequestAclMigration(state);
       state.updatedAt = new Date().toISOString();
       fs.writeFileSync(dbFilePath, JSON.stringify(state, null, 2), 'utf-8');
     } catch (e) {
@@ -96,7 +242,13 @@ function createCentralDatabaseSyncPlugin(): Plugin {
       // CORS headers for LAN / cross-device access
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, X-GS-Session-Uid, X-GS-Session-Email'
+      );
+
+      const callerUid = String(req.headers['x-gs-session-uid'] || '');
+      const callerEmail = String(req.headers['x-gs-session-email'] || '');
 
       if (req.method === 'OPTIONS') {
         res.statusCode = 204;
@@ -121,7 +273,7 @@ function createCentralDatabaseSyncPlugin(): Plugin {
 
       // 2. Full State Fetch & Client-to-Server Merge
       if (url.startsWith('/api/central-db/state') && req.method === 'GET') {
-        const state = loadDb();
+        const state = scopeStateForCaller(loadDb(), callerUid, callerEmail);
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(state));
         return;
@@ -181,7 +333,7 @@ function createCentralDatabaseSyncPlugin(): Plugin {
           }
 
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(state));
+          res.end(JSON.stringify(scopeStateForCaller(state, callerUid, callerEmail)));
         } catch (err: any) {
           res.statusCode = 400;
           res.end(JSON.stringify({ error: err?.message }));

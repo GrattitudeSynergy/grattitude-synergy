@@ -69,6 +69,56 @@ export const PermissionsService = {
     return employee.level === 0;
   },
 
+  normalizeEmpId(id?: string): string {
+    return (id || '').trim().toUpperCase().replace(/^#/, '');
+  },
+
+  /**
+   * Returns true if `viewer` is the assigned Reporting Manager of the employee who submitted the request.
+   */
+  isReportingManagerOfRequest(
+    viewer: Employee | null,
+    request: { employeeId: string; reportingManagerId?: string },
+    allEmployees: Employee[]
+  ): boolean {
+    if (!viewer) return false;
+    const viewerNormId = this.normalizeEmpId(viewer.id);
+    const viewerNormEcode = this.normalizeEmpId(viewer.ecode);
+    const reqEmpNormId = this.normalizeEmpId(request.employeeId);
+
+    // An employee cannot be the approving reporting manager for their own request
+    if (viewerNormId === reqEmpNormId || viewerNormEcode === reqEmpNormId) {
+      return false;
+    }
+
+    const targetEmp = allEmployees.find(
+      (e) =>
+        this.normalizeEmpId(e.id) === reqEmpNormId ||
+        this.normalizeEmpId(e.ecode) === reqEmpNormId
+    );
+
+    const effectiveManagerId =
+      targetEmp?.reportingManagerId || request.reportingManagerId || '';
+    const managerNorm = this.normalizeEmpId(effectiveManagerId);
+
+    if (!managerNorm) return false;
+    return managerNorm === viewerNormId || managerNorm === viewerNormEcode;
+  },
+
+  /**
+   * Leave & Regularization requests in the approval queue are strictly visible and actionable
+   * ONLY by the employee's Reporting Manager and Admin.
+   */
+  canManageLeaveOrRegularization(
+    viewer: Employee | null,
+    request: { employeeId: string; reportingManagerId?: string },
+    allEmployees: Employee[]
+  ): boolean {
+    if (!viewer) return false;
+    if (this.isAdmin(viewer)) return true;
+    return this.isReportingManagerOfRequest(viewer, request, allEmployees);
+  },
+
   /**
    * Strict RBAC for Bank & Statutory Tax Identifiers (PAN, Aadhaar, UAN, Bank Account, IFSC):
    * Viewable and editable ONLY by the employee themselves, Admin, or designated Accounts staff.

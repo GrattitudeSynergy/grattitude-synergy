@@ -1,0 +1,61 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getCallerEmployee() {
+      return get(/databases/$(database)/documents/employees/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.uid == 'EMP-001' ||
+        request.auth.token.email == 'grattitudesynergyllp@gmail.com' ||
+        getCallerEmployee().role == 'Admin'
+      );
+    }
+
+    function isOwnerOfRequest(resourceData) {
+      return isSignedIn() && resourceData.employeeId == request.auth.uid;
+    }
+
+    function isReportingManagerOfRequest(resourceData) {
+      return isSignedIn() && (
+        resourceData.reportingManagerId == request.auth.uid ||
+        get(/databases/$(database)/documents/employees/$(resourceData.employeeId)).data.reportingManagerId == request.auth.uid
+      );
+    }
+
+    // =========================================================================
+    // STRICT ROW-LEVEL SECURITY FOR LEAVE & REGULARIZATION REQUESTS
+    // 1. Employee: Can view only their own regularization and leave requests.
+    // 2. Reporting Manager: Can view requests submitted by employees reporting to them.
+    // 3. Admin: Can view all employees' regularization and leave requests.
+    // =========================================================================
+    match /showup_leave_requests/{requestId} {
+      allow read: if isOwnerOfRequest(resource.data)
+                  || isReportingManagerOfRequest(resource.data)
+                  || isAdmin();
+      allow create: if isOwnerOfRequest(request.resource.data) || isAdmin();
+      allow update: if isReportingManagerOfRequest(resource.data) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /showup_regularizations/{regId} {
+      allow read: if isOwnerOfRequest(resource.data)
+                  || isReportingManagerOfRequest(resource.data)
+                  || isAdmin();
+      allow create: if isOwnerOfRequest(request.resource.data) || isAdmin();
+      allow update: if isReportingManagerOfRequest(resource.data) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

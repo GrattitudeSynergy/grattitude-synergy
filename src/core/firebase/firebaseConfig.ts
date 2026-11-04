@@ -115,6 +115,234 @@ const ALL_COLLECTION_NAMES = [
 // Legacy test IDs that were replaced by official GSL* E-Codes
 const OBSOLETE_TEST_EMPLOYEE_IDS = new Set(['EMP-002', 'GSL0000']);
 
+// Collections protected by strict Database-Level Row-Level Security (RLS)
+const RLS_PROTECTED_REQUEST_COLLECTIONS = new Set([
+  'showup_leave_requests',
+  'showup_regularizations',
+]);
+
+function normalizeDbEmpId(id?: string): string {
+  return (id || '').trim().toUpperCase().replace(/^#/, '');
+}
+
+/**
+ * Retrofits & sanitizes any existing or incoming Leave Request / Regularization Request
+ * at the database level:
+ * - Maps legacy test IDs (e.g. EMP-002 -> GSL000) to canonical Employee IDs
+ * - Resolves and stamps the employee's true current `reportingManagerId` from `employees`
+ * - Stamps `visibilityScope: 'RESTRICTED_OWNER_MANAGER_ADMIN'` and `allowedViewerIds`
+ */
+function retrofitAndSanitizeRequestRecord(
+  docData: any,
+  employeesMap: Record<string, any>
+): any {
+  if (!docData || typeof docData !== 'object') return docData;
+
+  let rawEmpId = docData.employeeId || '';
+  if (rawEmpId === 'EMP-002') {
+    rawEmpId = 'GSL000';
+  }
+  const reqEmpNorm = normalizeDbEmpId(rawEmpId);
+  const reqEmpNameLower = (docData.employeeName || '').trim().toLowerCase();
+
+  const matchedEmp = Object.values(employeesMap || {}).find((e: any) => {
+    if (!e) return false;
+    const eIdNorm = normalizeDbEmpId(e.id);
+    const eCodeNorm = normalizeDbEmpId(e.ecode);
+    const eNameLower = (e.name || '').trim().toLowerCase();
+    return (
+      (reqEmpNorm && (eIdNorm === reqEmpNorm || eCodeNorm === reqEmpNorm)) ||
+      (reqEmpNameLower && eNameLower === reqEmpNameLower)
+    );
+  });
+
+  const canonicalEmployeeId = matchedEmp ? matchedEmp.id : rawEmpId;
+  const canonicalManagerId =
+    (matchedEmp && matchedEmp.reportingManagerId) ||
+    docData.reportingManagerId ||
+    'EMP-001';
+
+  const allowedViewerIds = Array.from(
+    new Set([canonicalEmployeeId, canonicalManagerId, 'EMP-001'].filter(Boolean))
+  );
+
+  return {
+    ...docData,
+    employeeId: canonicalEmployeeId,
+    employeeName: matchedEmp ? matchedEmp.name : docData.employeeName,
+    reportingManagerId: canonicalManagerId,
+    visibilityScope: 'RESTRICTED_OWNER_MANAGER_ADMIN',
+    allowedViewerIds,
+  };
+}
+
+/**
+ * Retroactively reviews and reverses visibility on ALL existing Leave Requests and
+ * Regularization Requests stored in the database so no legacy request remains visible to all.
+ */
+function migrateExistingLeaveAndRegularizationPermissions(): void {
+  const employeesMap = readLocalCollection<any>('employees');
+  if (Object.keys(employeesMap).length === 0) return;
+
+  for (const colName of RLS_PROTECTED_REQUEST_COLLECTIONS) {
+    const rawMap = readLocalCollection<any>(colName);
+    let modified = false;
+    const nextMap: Record<string, any> = {};
+
+    for (const [docId, docData] of Object.entries(rawMap)) {
+      if (!docData) continue;
+      // Remove any requests belonging to deleted dummy test employee GSL0000
+      if (docData.employeeId === 'GSL0000') {
+        modified = true;
+        continue;
+      }
+      const sanitized = retrofitAndSanitizeRequestRecord(docData, employeesMap);
+      nextMap[docId] = sanitized;
+      if (
+        sanitized.employeeId !== docData.employeeId ||
+        sanitized.reportingManagerId !== docData.reportingManagerId ||
+        sanitized.visibilityScope !== docData.visibilityScope ||
+        JSON.stringify(sanitized.allowedViewerIds) !==
+          JSON.stringify(docData.allowedViewerIds)
+      ) {
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      try {
+        localStorage.setItem(`${STORAGE_PREFIX}${colName}`, JSON.stringify(nextMap));
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  }
+}
+
+/**
+ * Database-Level Row-Level Security (RLS) Evaluator for Leave & Regularization Requests:
+ * 1. Employee: Can view ONLY their own regularization and leave requests.
+ * 2. Reporting Manager: Can view requests submitted by employees reporting to them.
+ * 3. Admin: Can view all employees' regularization and leave requests.
+ */
+function canSessionUserReadRequestRecord(
+  docData: any,
+  employeesMap: Record<string, any>
+): boolean {
+  if (!docData) return false;
+  const session = getCurrentSessionUser();
+  if (!session || !session.uid) return false;
+
+  const sessionUidNorm = normalizeDbEmpId(session.uid);
+  const sessionEmailLower = (session.email || '').trim().toLowerCase();
+
+  const viewerEmp = Object.values(employeesMap || {}).find((e: any) => {
+    if (!e) return false;
+    return (
+      normalizeDbEmpId(e.id) === sessionUidNorm ||
+      normalizeDbEmpId(e.ecode) === sessionUidNorm ||
+      (sessionEmailLower && (e.email || '').trim().toLowerCase() === sessionEmailLower)
+    );
+  });
+
+  // Rule 3: Admin can view all employees' regularization and leave requests
+  if (
+    sessionUidNorm === 'EMP-001' ||
+    sessionEmailLower === 'grattitudesynergyllp@gmail.com' ||
+    viewerEmp?.role === 'Admin'
+  ) {
+    return true;
+  }
+
+  const sanitized = retrofitAndSanitizeRequestRecord(docData, employeesMap);
+  const reqEmpNorm = normalizeDbEmpId(sanitized.employeeId);
+  const viewerIdNorm = viewerEmp ? normalizeDbEmpId(viewerEmp.id) : sessionUidNorm;
+  const viewerEcodeNorm = viewerEmp ? normalizeDbEmpId(viewerEmp.ecode) : sessionUidNorm;
+
+  // Rule 1: Employee can view their own regularization and leave requests
+  if (
+    reqEmpNorm &&
+    (reqEmpNorm === viewerIdNorm ||
+      reqEmpNorm === viewerEcodeNorm ||
+      reqEmpNorm === sessionUidNorm)
+  ) {
+    return true;
+  }
+
+  // Rule 2: Reporting Manager can view requests submitted by employees reporting to them
+  const reqManagerNorm = normalizeDbEmpId(sanitized.reportingManagerId);
+  if (
+    reqManagerNorm &&
+    (reqManagerNorm === viewerIdNorm ||
+      reqManagerNorm === viewerEcodeNorm ||
+      reqManagerNorm === sessionUidNorm)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function canSessionUserApproveRequestRecord(
+  docData: any,
+  employeesMap: Record<string, any>
+): boolean {
+  if (!docData) return false;
+  const session = getCurrentSessionUser();
+  if (!session || !session.uid) return false;
+
+  const sessionUidNorm = normalizeDbEmpId(session.uid);
+  const sessionEmailLower = (session.email || '').trim().toLowerCase();
+
+  const viewerEmp = Object.values(employeesMap || {}).find((e: any) => {
+    if (!e) return false;
+    return (
+      normalizeDbEmpId(e.id) === sessionUidNorm ||
+      normalizeDbEmpId(e.ecode) === sessionUidNorm ||
+      (sessionEmailLower && (e.email || '').trim().toLowerCase() === sessionEmailLower)
+    );
+  });
+
+  if (
+    sessionUidNorm === 'EMP-001' ||
+    sessionEmailLower === 'grattitudesynergyllp@gmail.com' ||
+    viewerEmp?.role === 'Admin'
+  ) {
+    return true;
+  }
+
+  const sanitized = retrofitAndSanitizeRequestRecord(docData, employeesMap);
+  const reqEmpNorm = normalizeDbEmpId(sanitized.employeeId);
+  const viewerIdNorm = viewerEmp ? normalizeDbEmpId(viewerEmp.id) : sessionUidNorm;
+  const viewerEcodeNorm = viewerEmp ? normalizeDbEmpId(viewerEmp.ecode) : sessionUidNorm;
+
+  // An employee cannot approve their own request
+  if (reqEmpNorm === viewerIdNorm || reqEmpNorm === viewerEcodeNorm) {
+    return false;
+  }
+
+  const reqManagerNorm = normalizeDbEmpId(sanitized.reportingManagerId);
+  return Boolean(
+    reqManagerNorm &&
+      (reqManagerNorm === viewerIdNorm ||
+        reqManagerNorm === viewerEcodeNorm ||
+        reqManagerNorm === sessionUidNorm)
+  );
+}
+
+function filterCollectionByDatabaseRLS<T>(
+  collectionName: string,
+  items: T[]
+): T[] {
+  if (!RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+    return items;
+  }
+  const employeesMap = readLocalCollection<any>('employees');
+  return items
+    .map((item) => retrofitAndSanitizeRequestRecord(item, employeesMap) as T)
+    .filter((item) => canSessionUserReadRequestRecord(item, employeesMap));
+}
+
 type SnapshotCallback<T> = (items: T[]) => void;
 const collectionListeners: Map<string, Set<SnapshotCallback<any>>> = new Map();
 
@@ -181,7 +409,7 @@ function notifyCollectionListeners(collectionName: string): void {
   const listeners = collectionListeners.get(collectionName);
   if (!listeners || listeners.size === 0) return;
   const map = readLocalCollection<any>(collectionName);
-  const list = Object.values(map);
+  const list = filterCollectionByDatabaseRLS(collectionName, Object.values(map));
   listeners.forEach((cb) => {
     try {
       cb(list);
@@ -470,10 +698,17 @@ function applyIncomingPacketToLocal(payload: any): void {
         saveDeletedDocsMap(deletedDocs);
       }
       const existing = map[docId] || { id: docId };
-      map[docId] =
+      let nextRecord =
         collectionName === 'employees'
           ? mergeEmployeeRecord(existing, { ...existing, ...data, id: docId })
           : { ...existing, ...data, id: docId };
+
+      if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+        const empMap = readLocalCollection<any>('employees');
+        nextRecord = retrofitAndSanitizeRequestRecord(nextRecord, empMap);
+      }
+
+      map[docId] = nextRecord;
       writeLocalCollection(collectionName, map, false);
 
       if (collectionName === 'employees' && map[docId]?.email) {
@@ -481,6 +716,7 @@ function applyIncomingPacketToLocal(payload: any): void {
         const reconciled = reconcileEmployeesAndAuth(map, accs, deletedDocs);
         saveStoredAccounts(reconciled.authAccounts);
         writeLocalCollection('employees', reconciled.employees, false);
+        migrateExistingLeaveAndRegularizationPermissions();
       }
     }
   } else if (payload.type === 'AUTH_ACCOUNT_UPSERT' && payload.emailKey && payload.account) {
@@ -599,12 +835,18 @@ function applyCentralStateToLocal(state: {
         for (const docId of Object.keys(mergedCol)) {
           if (mergedDeleted[`${colName}:${docId}`]) {
             delete mergedCol[docId];
+          } else if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(colName)) {
+            mergedCol[docId] = retrofitAndSanitizeRequestRecord(
+              mergedCol[docId],
+              reconciled.employees
+            );
           }
         }
         writeLocalCollection(colName, mergedCol, false);
       }
     }
   }
+  migrateExistingLeaveAndRegularizationPermissions();
 }
 
 export async function synchronizeWithCentralDatabase(): Promise<void> {
@@ -625,6 +867,9 @@ export async function synchronizeWithCentralDatabase(): Promise<void> {
     writeLocalCollection('employees', localReconciled.employees, false);
   }
 
+  // 2B. Retroactively enforce database-level access restrictions on all existing Leave & Regularization requests
+  migrateExistingLeaveAndRegularizationPermissions();
+
   // 3. Also sync with Local Vite Server (`/api/central-db/merge`) when running locally
   const localCollections: Record<string, Record<string, any>> = {};
   for (const colName of ALL_COLLECTION_NAMES) {
@@ -635,9 +880,15 @@ export async function synchronizeWithCentralDatabase(): Promise<void> {
   }
 
   try {
+    const currentSession = getCurrentSessionUser();
     const res = await fetch('/api/central-db/merge', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-GS-Session-Uid': currentSession?.uid || '',
+        'X-GS-Session-Email': currentSession?.email || '',
+      },
       body: JSON.stringify({
         collections: localCollections,
         authAccounts: getStoredAccounts(),
@@ -748,9 +999,14 @@ async function pushDocMutationToCentralServer(
 
   // 2. Also persist to local Vite dev server if running locally
   try {
+    const currentSession = getCurrentSessionUser();
     await fetch('/api/central-db/doc', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-GS-Session-Uid': currentSession?.uid || '',
+        'X-GS-Session-Email': currentSession?.email || '',
+      },
       body: JSON.stringify({ action, collectionName, docId, data }),
     });
   } catch {
@@ -784,7 +1040,7 @@ async function pushAuthAccountToCentralServer(
 }
 
 // ============================================================================
-// FIRESTORE COLLECTION WRAPPER
+// FIRESTORE COLLECTION WRAPPER (With Database-Level Row-Level Security)
 // ============================================================================
 
 export const FirestoreEngine = {
@@ -798,9 +1054,13 @@ export const FirestoreEngine = {
     const set = collectionListeners.get(collectionName)!;
     set.add(callback);
 
-    // Emit initial state immediately from persistent cache
+    if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+      migrateExistingLeaveAndRegularizationPermissions();
+    }
+
+    // Emit initial state immediately from persistent cache (enforcing Database RLS)
     const initialMap = readLocalCollection<T>(collectionName);
-    callback(Object.values(initialMap));
+    callback(filterCollectionByDatabaseRLS(collectionName, Object.values(initialMap)));
 
     // Trigger background cloud sync when subscribing to employees
     if (collectionName === 'employees') {
@@ -820,7 +1080,7 @@ export const FirestoreEngine = {
               nextMap[docSnap.id] = { ...(docSnap.data() as T), id: docSnap.id };
             });
             localStorage.setItem(`${STORAGE_PREFIX}${collectionName}`, JSON.stringify(nextMap));
-            callback(Object.values(nextMap));
+            callback(filterCollectionByDatabaseRLS(collectionName, Object.values(nextMap)));
           },
           () => {
             // Offline cache fallback already handled
@@ -838,6 +1098,9 @@ export const FirestoreEngine = {
   },
 
   async getCollection<T extends { id: string }>(collectionName: string): Promise<T[]> {
+    if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+      migrateExistingLeaveAndRegularizationPermissions();
+    }
     if (hasLiveFirebaseKeys && firestoreDb) {
       try {
         const snap = await getDocs(collection(firestoreDb, collectionName));
@@ -850,32 +1113,47 @@ export const FirestoreEngine = {
             map[d.id] = item;
           });
           localStorage.setItem(`${STORAGE_PREFIX}${collectionName}`, JSON.stringify(map));
-          return items;
+          return filterCollectionByDatabaseRLS(collectionName, items);
         }
       } catch {
         // Fallback to central cloud/local persistent cache
       }
     }
     const map = readLocalCollection<T>(collectionName);
-    return Object.values(map);
+    return filterCollectionByDatabaseRLS(collectionName, Object.values(map));
   },
 
   async getDocument<T extends { id: string }>(
     collectionName: string,
     docId: string
   ): Promise<T | null> {
+    if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+      migrateExistingLeaveAndRegularizationPermissions();
+    }
     if (hasLiveFirebaseKeys && firestoreDb) {
       try {
         const snap = await getDoc(doc(firestoreDb, collectionName, docId));
         if (snap.exists()) {
-          return { ...(snap.data() as T), id: snap.id };
+          const item = { ...(snap.data() as T), id: snap.id };
+          if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+            const empMap = readLocalCollection<any>('employees');
+            if (!canSessionUserReadRequestRecord(item, empMap)) return null;
+          }
+          return item;
         }
       } catch {
         // Fallback
       }
     }
     const map = readLocalCollection<T>(collectionName);
-    return map[docId] || null;
+    const docItem = map[docId] || null;
+    if (docItem && RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+      const empMap = readLocalCollection<any>('employees');
+      if (!canSessionUserReadRequestRecord(docItem, empMap)) {
+        return null;
+      }
+    }
+    return docItem;
   },
 
   async setDocument<T extends { id: string }>(
@@ -891,7 +1169,18 @@ export const FirestoreEngine = {
     }
 
     const map = readLocalCollection<T>(collectionName);
-    const fullDoc = { ...data, id: docId };
+    let fullDoc: any = { ...data, id: docId };
+
+    if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+      const empMap = readLocalCollection<any>('employees');
+      fullDoc = retrofitAndSanitizeRequestRecord(fullDoc, empMap);
+      if (!options?.skipCloudPush && !canSessionUserReadRequestRecord(fullDoc, empMap)) {
+        throw new Error(
+          'Database Access Denied (RLS): You do not have permission to create or overwrite this request.'
+        );
+      }
+    }
+
     map[docId] = fullDoc;
     writeLocalCollection(collectionName, map);
 
@@ -913,8 +1202,24 @@ export const FirestoreEngine = {
     options?: { skipCloudPush?: boolean }
   ): Promise<void> {
     const map = readLocalCollection<T>(collectionName);
-    if (map[docId]) {
-      map[docId] = { ...map[docId], ...partial, id: docId };
+    const existingDoc = map[docId];
+
+    if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName) && existingDoc) {
+      const empMap = readLocalCollection<any>('employees');
+      if (!canSessionUserApproveRequestRecord(existingDoc, empMap)) {
+        throw new Error(
+          'Database Access Denied (RLS): Only the assigned Reporting Manager or Admin can update or approve this request.'
+        );
+      }
+    }
+
+    if (existingDoc) {
+      let updated: any = { ...existingDoc, ...partial, id: docId };
+      if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
+        const empMap = readLocalCollection<any>('employees');
+        updated = retrofitAndSanitizeRequestRecord(updated, empMap);
+      }
+      map[docId] = updated;
       writeLocalCollection(collectionName, map);
     }
 
@@ -1016,6 +1321,9 @@ function setCurrentSessionUser(user: AuthSessionUser | null): void {
 function notifyAuthListeners(): void {
   const current = getCurrentSessionUser();
   authListeners.forEach((cb) => cb(current));
+  for (const colName of RLS_PROTECTED_REQUEST_COLLECTIONS) {
+    notifyCollectionListeners(colName);
+  }
 }
 
 /**
