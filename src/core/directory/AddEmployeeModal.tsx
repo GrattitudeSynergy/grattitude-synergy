@@ -38,6 +38,14 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
 
   // Core Employee State
   const computeNextEcode = (emps: Employee[]) => {
+    const maxGslNum = emps.reduce((max, emp) => {
+      const m = emp.ecode?.match(/^#?GSL(\d+)$/i);
+      const num = m ? parseInt(m[1], 10) : 0;
+      return num > max ? num : max;
+    }, 0);
+    if (maxGslNum > 0) {
+      return `#GSL${String(maxGslNum + 1).padStart(3, '0')}`;
+    }
     const maxNum = emps.reduce((max, emp) => {
       const m = emp.ecode?.match(/EMP-(\d+)/i);
       const num = m ? parseInt(m[1], 10) : 0;

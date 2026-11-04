@@ -1,6 +1,7 @@
 import {
   FirestoreEngine,
   AuthEngine,
+  getDeletedDocsMap,
   synchronizeWithCentralDatabase,
 } from './firebase/firebaseConfig';
 import { KPI_MASTER_SEED } from '../modules/perform/kpiMasterSeed';
@@ -18,19 +19,44 @@ import type {
 // ============================================================================
 // PRE-SEEDED DATA SPECIFICATION (seedData.ts)
 // ============================================================================
-// Strictly adheres to Section 10:
-// 1. Employees: ONLY EMP-001 (Admin: grattitudesynergyllp@gmail.com, Level 5,
-//    role 'Admin', isManager: true, hasCrmAccess: true, status 'Active').
+// 1. Employees: EMP-001 (Corporate Super Admin) + 13 Grattitude Synergy Workforce
+//    Members (#GSL002 to GSLP04).
 // 2. Perform Master Catalog: 75 KPIs (15 per level for Levels 1 to 5, 100% weight).
 // 3. Intern Roadmaps: 4-stage roadmaps for Engineering, Marketing, Operations,
 //    and Business Development.
 // 4. Show Up HRMS Policy: Shift 09:30–18:30, 10:00 AM grace cutoff, 3 late marks =
 //    0.5 day deduction, 15-day EL notice.
 // 5. Connect CRM: No seed leads (starts empty).
-// 6. All other collections start empty.
 // ============================================================================
 
 export const DEFAULT_ADMIN_PASSWORD = 'Admin@123';
+export const DEFAULT_EMPLOYEE_PASSWORD = 'Welcome@123';
+
+const EMPTY_PROFILE_DETAILS = {
+  personal: {
+    address: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    phone: '',
+  },
+  employment: {
+    workLocation: 'Bengaluru HQ',
+    probationPeriodMonths: 3,
+    noticePeriodDays: 30,
+  },
+  bank: {
+    accountNumber: '',
+    bankName: '',
+    ifscCode: '',
+    branchName: '',
+  },
+  legalIdentity: {
+    panNumber: '',
+    aadhaarNumber: '',
+    uanNumber: '',
+    passportNumber: '',
+  },
+};
 
 export const SEED_ADMIN_EMPLOYEE: Employee = {
   id: 'EMP-001',
@@ -50,6 +76,8 @@ export const SEED_ADMIN_EMPLOYEE: Employee = {
   isAssociate: false,
   isAccountsStaff: true,
   mustChangePassword: false,
+  passwordHash: DEFAULT_ADMIN_PASSWORD,
+  updatedAt: '2026-11-04T00:00:00.000Z',
   personal: {
     address: 'Grattitude Synergy HQ, Prestige Tech Park, Bengaluru, KA 560103',
     emergencyContactName: 'Corporate Security Desk',
@@ -74,6 +102,296 @@ export const SEED_ADMIN_EMPLOYEE: Employee = {
     passportNumber: 'Z4928174',
   },
 };
+
+export const SEED_INITIAL_EMPLOYEES: Employee[] = [
+  SEED_ADMIN_EMPLOYEE,
+  {
+    id: '#GSL002',
+    ecode: '#GSL002',
+    name: 'Kiran Giri',
+    email: 'kiran.giri@grattitude.in',
+    designation: 'Consultant',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 3,
+    role: 'Employee',
+    reportingManagerId: 'GSLP04',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: false,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL003',
+    ecode: '#GSL003',
+    name: 'Nikhil Fulari',
+    email: 'nikhil.fulari@grattitude.in',
+    designation: 'Senior Engineer',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 2,
+    role: 'Employee',
+    reportingManagerId: 'GSLP04',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL004',
+    ecode: '#GSL004',
+    name: 'Prithvi Bhatt',
+    email: 'prithvi.bhatt@grattitude.in',
+    designation: 'Consultant',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 3,
+    role: 'Manager',
+    reportingManagerId: '#GSLP01',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: true,
+    hasCrmAccess: false,
+    isAssociate: false,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL006',
+    ecode: '#GSL006',
+    name: 'Rahul Sonawane',
+    email: 'rahul.sonawane@grattitude.in',
+    designation: 'Senior Engineer',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 2,
+    role: 'Employee',
+    reportingManagerId: 'GSLP04',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL014',
+    ecode: '#GSL014',
+    name: 'Aditi Gavande',
+    email: 'aditi.gavande@grattitude.in',
+    designation: 'Senior Analyst',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 2,
+    role: 'Employee',
+    reportingManagerId: 'GSLP04',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL016',
+    ecode: '#GSL016',
+    name: 'Shishir Bidgar',
+    email: 'shishir.bidgar@grattitude.in',
+    designation: 'Assistant Manager',
+    department: 'Business Development',
+    vertical: 'Growth & Revenue',
+    level: 2,
+    role: 'Employee',
+    reportingManagerId: '#GSLP01',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL017',
+    ecode: '#GSL017',
+    name: 'Shravani Mhetar',
+    email: 'shravani.mhetar@grattitude.in',
+    designation: 'Assistant Manager',
+    department: 'Business Development',
+    vertical: 'Growth & Revenue',
+    level: 2,
+    role: 'Employee',
+    reportingManagerId: '#GSLP01',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL021',
+    ecode: '#GSL021',
+    name: 'Bhupesh Mastud',
+    email: 'bhupesh.mastud@grattitude.in',
+    designation: 'Project Engineer',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 1,
+    role: 'Employee',
+    reportingManagerId: '#GSL004',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL023',
+    ecode: '#GSL023',
+    name: 'Tanvi Ganorkar',
+    email: 'tanvi.ganorkar@grattitude.in',
+    designation: 'Senior Analyst',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 2,
+    role: 'Employee',
+    reportingManagerId: 'GSLP04',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSL024',
+    ecode: '#GSL024',
+    name: 'Vinayak Swami',
+    email: 'vinayak.swami@grattitude.in',
+    designation: 'Project Engineer',
+    department: 'Engineering',
+    vertical: 'Corporate Shared Services',
+    level: 1,
+    role: 'Employee',
+    reportingManagerId: '#GSL004',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: true,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: '#GSLP01',
+    ecode: '#GSLP01',
+    name: 'Akshay Pahade',
+    email: 'akshay.pahade@grattitude.in',
+    designation: 'Managing Patner',
+    department: 'Executive Administration',
+    vertical: 'Strategic Advisory',
+    level: 5,
+    role: 'CEO',
+    reportingManagerId: '',
+    dateOfJoining: '2024-04-01',
+    status: 'Active',
+    isManager: true,
+    hasCrmAccess: true,
+    isAssociate: false,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: 'GSL000',
+    ecode: 'GSL000',
+    name: 'Tanisha Godha',
+    email: 'tanisha.godha@grattitude.in',
+    designation: 'Business & Operations Analyst',
+    department: 'Engineering',
+    vertical: 'Growth & Revenue',
+    level: 0,
+    role: 'Employee',
+    reportingManagerId: '#GSLP01',
+    dateOfJoining: '2025-04-01',
+    status: 'Active',
+    isManager: false,
+    hasCrmAccess: false,
+    isAssociate: false,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+  {
+    id: 'GSLP04',
+    ecode: 'GSLP04',
+    name: 'Anindita Roy',
+    email: 'anindita.roy@grattitude.in',
+    designation: 'Operations Head',
+    department: 'Operations',
+    vertical: 'Strategic Advisory',
+    level: 4,
+    role: 'Manager',
+    reportingManagerId: '#GSLP01',
+    dateOfJoining: '2024-06-01',
+    status: 'Active',
+    isManager: true,
+    hasCrmAccess: false,
+    isAssociate: false,
+    isAccountsStaff: false,
+    mustChangePassword: true,
+    passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+    ...EMPTY_PROFILE_DETAILS,
+  },
+];
 
 export const SEED_INTERN_ROADMAPS: PerformInternRoadmap[] = [
   {
@@ -349,7 +667,7 @@ export const SEED_DEFAULT_FORM_FIELDS: DynamicFormField[] = [
     section: 'Identity',
     type: 'text',
     required: true,
-    placeholder: 'e.g. EMP-002',
+    placeholder: 'e.g. #GSL025',
     isSystem: true,
     order: 1,
   },
@@ -479,26 +797,59 @@ export const SEED_DEFAULT_FORM_FIELDS: DynamicFormField[] = [
 const BOOTSTRAP_FLAG_KEY = 'gs_enterprise_bootstrapped_v1';
 
 export async function initializeSeedData(): Promise<void> {
-  // 0. Synchronize with Central Database Server first so any existing employee records
-  //    in this browser are merged to the central server and all central records are pulled down.
-  await synchronizeWithCentralDatabase();
+  const deletedDocs = getDeletedDocsMap();
 
-  // Always ensure the Admin Firebase Auth record exists so EMP-001 can sign in immediately
-  AuthEngine.ensureBootstrapAdminAuth(
-    SEED_ADMIN_EMPLOYEE.id,
-    SEED_ADMIN_EMPLOYEE.email,
-    DEFAULT_ADMIN_PASSWORD
-  );
+  // 0. Ensure all 14 core Grattitude Synergy employees (EMP-001 + 13 GSL* employees)
+  //    and their Auth credentials exist in local persistent storage on every device/browser.
+  for (const seedEmp of SEED_INITIAL_EMPLOYEES) {
+    if (deletedDocs[`employees:${seedEmp.id}`]) continue;
 
-  // Check if employees collection already has EMP-001
-  const existingAdmin = await FirestoreEngine.getDocument<Employee>(
-    'employees',
-    SEED_ADMIN_EMPLOYEE.id
-  );
+    const defaultPwd =
+      seedEmp.id === 'EMP-001' ? DEFAULT_ADMIN_PASSWORD : DEFAULT_EMPLOYEE_PASSWORD;
 
-  if (!existingAdmin) {
-    await FirestoreEngine.setDocument('employees', SEED_ADMIN_EMPLOYEE.id, SEED_ADMIN_EMPLOYEE);
+    AuthEngine.ensureBootstrapAdminAuth(seedEmp.id, seedEmp.email, defaultPwd, {
+      skipCloudPush: true,
+    });
+
+    const existingEmp = await FirestoreEngine.getDocument<Employee>('employees', seedEmp.id);
+    if (!existingEmp) {
+      await FirestoreEngine.setDocument('employees', seedEmp.id, seedEmp, {
+        skipCloudPush: true,
+      });
+    }
+
+    const existingBalance = await FirestoreEngine.getDocument(
+      'showup_leave_balances',
+      seedEmp.id
+    );
+    if (!existingBalance) {
+      await FirestoreEngine.setDocument(
+        'showup_leave_balances',
+        seedEmp.id,
+        {
+          id: seedEmp.id,
+          employeeId: seedEmp.id,
+          balances: {
+            CL: 12,
+            SL: 10,
+            EL: 15,
+            Optional: 3,
+            Maternity: 180,
+            Paternity: 15,
+            'Comp Off': 2,
+            LWP: 365,
+          },
+          lateMarksCount: 0,
+          lateLeaveDeducted: 0,
+          updatedAt: '2026-11-04T00:00:00.000Z',
+        },
+        { skipCloudPush: true }
+      );
+    }
   }
+
+  // Synchronize with Central Cloud Database & Local Server to pull any new employees or password updates
+  await synchronizeWithCentralDatabase();
 
   const alreadyBootstrapped = localStorage.getItem(BOOTSTRAP_FLAG_KEY);
   if (alreadyBootstrapped === 'true') {
@@ -509,32 +860,42 @@ export async function initializeSeedData(): Promise<void> {
   const existingKpis = await FirestoreEngine.getCollection('perform_kpi_masters');
   if (existingKpis.length === 0) {
     for (const kpi of KPI_MASTER_SEED) {
-      await FirestoreEngine.setDocument('perform_kpi_masters', kpi.id, kpi);
+      await FirestoreEngine.setDocument('perform_kpi_masters', kpi.id, kpi, {
+        skipCloudPush: true,
+      });
     }
   }
 
   // 2. Seed Perform Grade Config & Perform Lock Config (perform_config)
   const existingGradeCfg = await FirestoreEngine.getDocument('perform_config', 'grade_cutoffs');
   if (!existingGradeCfg) {
-    await FirestoreEngine.setDocument('perform_config', 'grade_cutoffs', SEED_GRADE_CONFIG);
+    await FirestoreEngine.setDocument('perform_config', 'grade_cutoffs', SEED_GRADE_CONFIG, {
+      skipCloudPush: true,
+    });
   }
   const existingPerformLock = await FirestoreEngine.getDocument('perform_config', 'perform_lock');
   if (!existingPerformLock) {
-    await FirestoreEngine.setDocument('perform_config', 'perform_lock', SEED_PERFORM_LOCK);
+    await FirestoreEngine.setDocument('perform_config', 'perform_lock', SEED_PERFORM_LOCK, {
+      skipCloudPush: true,
+    });
   }
 
   // 3. Seed 4 Department Intern Roadmaps (perform_intern_roadmaps)
   const existingRoadmaps = await FirestoreEngine.getCollection('perform_intern_roadmaps');
   if (existingRoadmaps.length === 0) {
     for (const roadmap of SEED_INTERN_ROADMAPS) {
-      await FirestoreEngine.setDocument('perform_intern_roadmaps', roadmap.id, roadmap);
+      await FirestoreEngine.setDocument('perform_intern_roadmaps', roadmap.id, roadmap, {
+        skipCloudPush: true,
+      });
     }
   }
 
   // 4. Seed Show Up HRMS Policy (showup_policy)
   const existingPolicy = await FirestoreEngine.getDocument('showup_policy', 'default_policy');
   if (!existingPolicy) {
-    await FirestoreEngine.setDocument('showup_policy', 'default_policy', SEED_SHOWUP_POLICY);
+    await FirestoreEngine.setDocument('showup_policy', 'default_policy', SEED_SHOWUP_POLICY, {
+      skipCloudPush: true,
+    });
   }
 
   // 5. Seed Compensation Lock Config (showup_compensation_lock)
@@ -546,14 +907,17 @@ export async function initializeSeedData(): Promise<void> {
     await FirestoreEngine.setDocument(
       'showup_compensation_lock',
       'global_lock',
-      SEED_COMPENSATION_LOCK
+      SEED_COMPENSATION_LOCK,
+      { skipCloudPush: true }
     );
   }
 
   // 6. Seed App Settings (fiscal_settings & employee_form_schema)
   const existingFiscal = await FirestoreEngine.getDocument('app_settings', 'fiscal_settings');
   if (!existingFiscal) {
-    await FirestoreEngine.setDocument('app_settings', 'fiscal_settings', SEED_FISCAL_SETTINGS);
+    await FirestoreEngine.setDocument('app_settings', 'fiscal_settings', SEED_FISCAL_SETTINGS, {
+      skipCloudPush: true,
+    });
   }
 
   const existingFormSchema = await FirestoreEngine.getDocument(
@@ -561,11 +925,16 @@ export async function initializeSeedData(): Promise<void> {
     'employee_form_schema'
   );
   if (!existingFormSchema) {
-    await FirestoreEngine.setDocument('app_settings', 'employee_form_schema', {
-      id: 'employee_form_schema',
-      fields: SEED_DEFAULT_FORM_FIELDS,
-      updatedAt: new Date().toISOString(),
-    });
+    await FirestoreEngine.setDocument(
+      'app_settings',
+      'employee_form_schema',
+      {
+        id: 'employee_form_schema',
+        fields: SEED_DEFAULT_FORM_FIELDS,
+        updatedAt: new Date().toISOString(),
+      },
+      { skipCloudPush: true }
+    );
   }
 
   localStorage.setItem(BOOTSTRAP_FLAG_KEY, 'true');
