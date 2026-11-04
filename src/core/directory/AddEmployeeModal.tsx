@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { UserPlus, AlertCircle, ShieldCheck, KeyRound } from 'lucide-react';
 import { Modal, Button, useToast } from '../components/DesignSystem';
-import { AuthEngine, FirestoreEngine, normalizeIdentifier } from '../firebase/firebaseConfig';
+import {
+  AuthEngine,
+  FirestoreEngine,
+  normalizeIdentifier,
+  synchronizeWithCentralDatabase,
+} from '../firebase/firebaseConfig';
 import { PermissionsService } from '../services/permissionsService';
 import { AuditService } from '../services/auditService';
 import { NotificationService } from '../services/notificationService';
@@ -32,8 +37,15 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
   const [formFields, setFormFields] = useState<DynamicFormField[]>(SEED_DEFAULT_FORM_FIELDS);
 
   // Core Employee State
-  const nextNumber = allEmployees.length + 1;
-  const defaultEcode = `EMP-${String(nextNumber).padStart(3, '0')}`;
+  const computeNextEcode = (emps: Employee[]) => {
+    const maxNum = emps.reduce((max, emp) => {
+      const m = emp.ecode?.match(/EMP-(\d+)/i);
+      const num = m ? parseInt(m[1], 10) : 0;
+      return num > max ? num : max;
+    }, 0);
+    return `EMP-${String(maxNum + 1).padStart(3, '0')}`;
+  };
+  const defaultEcode = computeNextEcode(allEmployees);
 
   const [ecode, setEcode] = useState(defaultEcode);
   const [name, setName] = useState('');
@@ -88,7 +100,10 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
       setMustChangePassword(Boolean(editingEmployee.mustChangePassword));
       setCustomValues(editingEmployee.customAttributes || {});
     } else {
-      setEcode(`EMP-${String(allEmployees.length + 1).padStart(3, '0')}`);
+      if (isOpen) {
+        void synchronizeWithCentralDatabase();
+      }
+      setEcode(computeNextEcode(allEmployees));
       setName('');
       setEmail('');
       setTempPassword('Welcome@123');
@@ -155,6 +170,7 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
 
     setSaving(true);
     try {
+      await synchronizeWithCentralDatabase();
       if (editingEmployee) {
         const updatedEmp: Employee = {
           ...editingEmployee,
@@ -174,6 +190,8 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
           isAssociate: level <= 2 && level > 0,
           isAccountsStaff,
           mustChangePassword,
+          updatedAt: new Date().toISOString(),
+          isCloudRecovered: false,
           customAttributes: customValues,
         };
 
@@ -190,8 +208,9 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
         return;
       }
 
-      // Check duplicate ecode
-      if (allEmployees.some((emp) => emp.ecode.toUpperCase() === ecode.trim().toUpperCase())) {
+      // Check duplicate ecode against latest synced employees
+      const latestEmployees = await FirestoreEngine.getCollection<Employee>('employees');
+      if (latestEmployees.some((emp) => emp.ecode.toUpperCase() === ecode.trim().toUpperCase())) {
         setError(`Employee Code "${ecode.trim().toUpperCase()}" already exists.`);
         setSaving(false);
         return;
@@ -222,6 +241,9 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
         isAssociate: level <= 2 && level > 0,
         isAccountsStaff,
         mustChangePassword,
+        passwordHash: tempPassword,
+        updatedAt: new Date().toISOString(),
+        isCloudRecovered: false,
         customAttributes: customValues,
         personal: {
           address: '',

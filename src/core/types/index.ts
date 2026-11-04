@@ -26,6 +26,9 @@ export interface Employee {
   isAssociate: boolean;
   isAccountsStaff?: boolean;
   mustChangePassword?: boolean;
+  passwordHash?: string;
+  updatedAt?: string;
+  isCloudRecovered?: boolean;
   customAttributes?: Record<string, any>;
   personal: {
     address: string;

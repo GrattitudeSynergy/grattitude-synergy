@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 interface CentralDatabaseState {
   collections: Record<string, Record<string, any>>;
   authAccounts: Record<string, any>;
+  deletedDocIds: Record<string, boolean>;
   updatedAt: string;
 }
 
@@ -32,6 +33,7 @@ function createCentralDatabaseSyncPlugin(): Plugin {
           return {
             collections: parsed.collections || {},
             authAccounts: parsed.authAccounts || {},
+            deletedDocIds: parsed.deletedDocIds || {},
             updatedAt: parsed.updatedAt || new Date().toISOString(),
           };
         }
@@ -42,6 +44,7 @@ function createCentralDatabaseSyncPlugin(): Plugin {
     return {
       collections: {},
       authAccounts: {},
+      deletedDocIds: {},
       updatedAt: new Date().toISOString(),
     };
   };
@@ -131,14 +134,24 @@ function createCentralDatabaseSyncPlugin(): Plugin {
           const state = loadDb();
           const incomingCollections = body.collections || {};
           const incomingAccounts = body.authAccounts || {};
+          const incomingDeleted = body.deletedDocIds || {};
           const updatedCollections: string[] = [];
+
+          state.deletedDocIds = { ...(state.deletedDocIds || {}), ...incomingDeleted };
 
           for (const [colName, docsMap] of Object.entries(incomingCollections)) {
             if (!state.collections[colName]) {
               state.collections[colName] = {};
             }
             for (const [docId, docData] of Object.entries(docsMap as Record<string, any>)) {
-              if (!state.collections[colName][docId]) {
+              if (state.deletedDocIds[`${colName}:${docId}`]) continue;
+              const existingDoc = state.collections[colName][docId];
+              if (
+                !existingDoc ||
+                (existingDoc.isCloudRecovered && !docData.isCloudRecovered) ||
+                (docData.updatedAt &&
+                  (!existingDoc.updatedAt || docData.updatedAt > existingDoc.updatedAt))
+              ) {
                 state.collections[colName][docId] = docData;
                 if (!updatedCollections.includes(colName)) {
                   updatedCollections.push(colName);
@@ -147,8 +160,14 @@ function createCentralDatabaseSyncPlugin(): Plugin {
             }
           }
 
-          for (const [emailKey, accData] of Object.entries(incomingAccounts)) {
-            if (!state.authAccounts[emailKey]) {
+          for (const [emailKey, accData] of Object.entries(incomingAccounts as Record<string, any>)) {
+            const existingAcc = state.authAccounts[emailKey];
+            if (
+              !existingAcc ||
+              (existingAcc.passwordHash === '__AUTO_BIND_ON_FIRST_LOGIN__' &&
+                accData?.passwordHash &&
+                accData.passwordHash !== '__AUTO_BIND_ON_FIRST_LOGIN__')
+            ) {
               state.authAccounts[emailKey] = accData;
             }
           }
@@ -182,6 +201,9 @@ function createCentralDatabaseSyncPlugin(): Plugin {
           }
 
           if (action === 'set') {
+            if (state.deletedDocIds) {
+              delete state.deletedDocIds[`${collectionName}:${docId}`];
+            }
             state.collections[collectionName][docId] = { ...data, id: docId };
           } else if (action === 'update') {
             const existing = state.collections[collectionName][docId] || { id: docId };
@@ -191,6 +213,8 @@ function createCentralDatabaseSyncPlugin(): Plugin {
               id: docId,
             };
           } else if (action === 'delete') {
+            state.deletedDocIds = state.deletedDocIds || {};
+            state.deletedDocIds[`${collectionName}:${docId}`] = true;
             delete state.collections[collectionName][docId];
           }
 
