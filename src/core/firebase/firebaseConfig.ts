@@ -187,6 +187,34 @@ function applyCentralStateToLocal(state: {
 export async function synchronizeWithCentralDatabase(): Promise<void> {
   if (typeof window === 'undefined') return;
 
+  // Auto-migrate any local employee or auth records that were created under the legacy domain
+  const empMap = readLocalCollection<any>('employees');
+  let empChanged = false;
+  for (const [id, emp] of Object.entries(empMap)) {
+    if (emp?.email && emp.email.includes('@') && !emp.email.endsWith('@grattitude.in') && emp.id !== 'EMP-001') {
+      const prefix = emp.email.split('@')[0].toLowerCase();
+      empMap[id] = { ...emp, email: `${prefix}@grattitude.in` };
+      empChanged = true;
+    }
+  }
+  if (empChanged) {
+    writeLocalCollection('employees', empMap, false);
+  }
+
+  const storedAccs = getStoredAccounts();
+  let accsChanged = false;
+  for (const [key, acc] of Object.entries(storedAccs)) {
+    if (acc?.email && acc.email.includes('@') && !acc.email.endsWith('@grattitude.in') && acc.uid !== 'EMP-001') {
+      const prefix = acc.email.split('@')[0].toLowerCase();
+      const newEmail = `${prefix}@grattitude.in`;
+      storedAccs[newEmail] = { ...acc, email: newEmail };
+      accsChanged = true;
+    }
+  }
+  if (accsChanged) {
+    saveStoredAccounts(storedAccs);
+  }
+
   // Gather any existing local records so zero existing employee records are lost
   const localCollections: Record<string, Record<string, any>> = {};
   for (const colName of ALL_COLLECTION_NAMES) {
@@ -246,6 +274,11 @@ export async function synchronizeWithCentralDatabase(): Promise<void> {
       // EventSource not reachable
     }
   }
+}
+
+// Automatically sync with the central server whenever this module loads (including Vite HMR)
+if (typeof window !== 'undefined') {
+  void synchronizeWithCentralDatabase();
 }
 
 async function pushDocMutationToCentralServer(
@@ -545,22 +578,60 @@ export const AuthEngine = {
     }
 
     const accounts = getStoredAccounts();
-    // Also allow matching against the `employees` collection if an employee's email was updated
     const employeesMap = readLocalCollection<any>('employees');
-    const matchedEmployee = Object.values(employeesMap).find(
-      (e: any) =>
-        e?.email?.toLowerCase() === normalizedEmail ||
-        e?.ecode?.toLowerCase() === identifier.trim().toLowerCase()
-    );
 
-    const account =
+    // Strip domain to match short username across @apexsynergy.local or @grattitude.in
+    const inputUsername = normalizedEmail.split('@')[0];
+
+    const matchedEmployee = Object.values(employeesMap).find((e: any) => {
+      const empEmail = (e?.email || '').toLowerCase();
+      const empUsername = empEmail.split('@')[0];
+      return (
+        empEmail === normalizedEmail ||
+        (inputUsername && empUsername === inputUsername) ||
+        e?.ecode?.toLowerCase() === identifier.trim().toLowerCase()
+      );
+    });
+
+    let account =
       accounts[normalizedEmail] ||
-      Object.values(accounts).find(
-        (a) =>
-          a.email.toLowerCase() === normalizedEmail ||
+      Object.values(accounts).find((a) => {
+        const accEmail = a.email.toLowerCase();
+        const accUsername = accEmail.split('@')[0];
+        return (
+          accEmail === normalizedEmail ||
+          (inputUsername && accUsername === inputUsername) ||
           a.uid.toLowerCase() === identifier.trim().toLowerCase() ||
           (matchedEmployee && a.uid.toLowerCase() === matchedEmployee.id.toLowerCase())
-      );
+        );
+      });
+
+    // If an Employee record exists in the directory (`employees` collection) with a matching
+    // email or username, ensure its domain is normalized to @grattitude.in and auto-provision
+    // its auth record if missing so no orphaned employee record is ever locked out.
+    if (matchedEmployee) {
+      if (
+        matchedEmployee.email &&
+        matchedEmployee.email.toLowerCase().endsWith('@apexsynergy.local')
+      ) {
+        const migratedEmail = `${matchedEmployee.email.split('@')[0].toLowerCase()}@grattitude.in`;
+        matchedEmployee.email = migratedEmail;
+        await FirestoreEngine.setDocument('employees', matchedEmployee.id, matchedEmployee);
+      }
+
+      if (!account) {
+        const recoveredAccount: AuthAccountRecord = {
+          uid: matchedEmployee.id,
+          email: matchedEmployee.email.toLowerCase(),
+          passwordHash: password,
+          createdAt: new Date().toISOString(),
+        };
+        accounts[recoveredAccount.email] = recoveredAccount;
+        saveStoredAccounts(accounts);
+        await pushAuthAccountToCentralServer(recoveredAccount.email, recoveredAccount);
+        account = recoveredAccount;
+      }
+    }
 
     if (!account) {
       throw new Error(`No account found for "${normalizedEmail}". Verify your email or username.`);
