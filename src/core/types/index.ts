@@ -284,17 +284,32 @@ export type AttendanceStatus =
   | 'Holiday'
   | 'Weekly Off';
 
+export interface AttendanceGeoLocation {
+  latitude: number;
+  longitude: number;
+  accuracy: number; // GPS accuracy in meters
+  date: string; // YYYY-MM-DD
+  timestamp: string; // ISO 8601 timestamp
+  punchType: 'IN' | 'OUT';
+  deviceType?: 'Desktop / Laptop' | 'Mobile / Tablet';
+}
+
 export interface ShowupAttendanceRecord {
   id: string; // employeeId_YYYY-MM-DD
   employeeId: string;
   employeeName?: string;
+  employeeEcode?: string;
+  department?: string;
   date: string; // YYYY-MM-DD
   status: AttendanceStatus;
   punches: Array<{
     type: 'IN' | 'OUT';
     timestamp: string;
     locationNote?: string;
+    gpsLocation?: AttendanceGeoLocation;
   }>;
+  checkInLocation?: AttendanceGeoLocation;
+  checkOutLocation?: AttendanceGeoLocation;
   breakMinutes?: number;
   totalHours: number;
   isLate: boolean;

@@ -120,6 +120,17 @@ export const PermissionsService = {
   },
 
   /**
+   * Strict RBAC for Attendance GPS Locations:
+   * - ONLY authorized Admin users can view employee GPS locations and location history.
+   * - Employees MUST NOT be able to view their own captured GPS location.
+   * - Managers MUST NOT have access to any employee GPS location information.
+   */
+  canAccessEmployeeGpsLocations(viewer: Employee | null): boolean {
+    if (!viewer) return false;
+    return viewer.role === 'Admin' || viewer.id === 'EMP-001';
+  },
+
+  /**
    * Strict RBAC for Bank & Statutory Tax Identifiers (PAN, Aadhaar, UAN, Bank Account, IFSC):
    * Viewable and editable ONLY by the employee themselves, Admin, or designated Accounts staff.
    */

@@ -10,6 +10,7 @@ import {
   Sliders,
   Lock,
   ShieldCheck,
+  MapPin,
 } from 'lucide-react';
 import {
   Card,
@@ -28,16 +29,24 @@ import { AddEmployeeModal } from './AddEmployeeModal';
 import { EmployeeFormBuilder } from './EmployeeFormBuilder';
 import { CompensationLockSettings } from './CompensationLockSettings';
 import { PerformLockSettings } from './PerformLockSettings';
-import type { Employee } from '../types';
+import { AdminGpsDashboard } from '../../modules/showup/AdminGpsDashboard';
+import type { Employee, ShowupAttendanceRecord } from '../types';
 
 export const EmployeeMasterList: React.FC<{
   currentEmployee: Employee;
 }> = ({ currentEmployee }) => {
   const { showToast } = useToast();
   const [activeSubTab, setActiveSubTab] = useState<
-    'directory' | 'form-builder' | 'compensation-lock' | 'perform-lock'
+    | 'directory'
+    | 'gps-tracker'
+    | 'form-builder'
+    | 'compensation-lock'
+    | 'perform-lock'
   >('directory');
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<
+    ShowupAttendanceRecord[]
+  >([]);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -54,15 +63,26 @@ export const EmployeeMasterList: React.FC<{
   const [forceMustChange, setForceMustChange] = useState(true);
   const [deleteTargetEmp, setDeleteTargetEmp] = useState<Employee | null>(null);
 
+  const isAdmin = PermissionsService.isAdmin(currentEmployee);
+  const canAccessGps = PermissionsService.canAccessEmployeeGpsLocations(currentEmployee);
+
   useEffect(() => {
     const unsub = FirestoreEngine.subscribeCollection<Employee>('employees', (items) => {
       const sorted = [...items].sort((a, b) => a.ecode.localeCompare(b.ecode));
       setEmployees(sorted);
     });
-    return () => unsub();
-  }, []);
-
-  const isAdmin = PermissionsService.isAdmin(currentEmployee);
+    let unsubAtt: (() => void) | null = null;
+    if (canAccessGps) {
+      unsubAtt = FirestoreEngine.subscribeCollection<ShowupAttendanceRecord>(
+        'showup_attendance',
+        setAttendanceRecords
+      );
+    }
+    return () => {
+      unsub();
+      if (unsubAtt) unsubAtt();
+    };
+  }, [canAccessGps]);
 
   const departments = Array.from(new Set(employees.map((e) => e.department)));
 
@@ -149,6 +169,15 @@ export const EmployeeMasterList: React.FC<{
       icon: <Users className="w-3.5 h-3.5" />,
       badge: employees.length,
     },
+    ...(canAccessGps
+      ? [
+          {
+            id: 'gps-tracker',
+            label: 'Attendance GPS Tracker',
+            icon: <MapPin className="w-3.5 h-3.5" />,
+          },
+        ]
+      : []),
     ...(isAdmin
       ? [
           {
@@ -196,6 +225,14 @@ export const EmployeeMasterList: React.FC<{
           </Button>
         )}
       </div>
+
+      {activeSubTab === 'gps-tracker' && canAccessGps && (
+        <AdminGpsDashboard
+          currentEmployee={currentEmployee}
+          attendanceRecords={attendanceRecords}
+          employees={employees}
+        />
+      )}
 
       {activeSubTab === 'form-builder' && isAdmin && (
         <EmployeeFormBuilder currentAdmin={currentEmployee} />

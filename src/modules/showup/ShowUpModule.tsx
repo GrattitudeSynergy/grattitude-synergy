@@ -14,6 +14,8 @@ import {
   XCircle,
   Zap,
   Umbrella,
+  MapPin,
+  Users,
 } from 'lucide-react';
 import {
   Card,
@@ -34,6 +36,8 @@ import { PolicyEngine } from './policyEngine';
 import { PunchWidget } from './PunchWidget';
 import { AttendanceCalendar } from './AttendanceCalendar';
 import { DocumentVaultView } from './DocumentVaultView';
+import { AdminGpsDashboard } from './AdminGpsDashboard';
+import { WhoIsInOfficeDashboard } from './WhoIsInOfficeDashboard';
 import type {
   Employee,
   ShowupAttendanceRecord,
@@ -54,13 +58,19 @@ export const ShowUpModule: React.FC<{
 }> = ({ currentEmployee }) => {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<
+    | 'who-is-in-office'
     | 'attendance'
     | 'leaves'
     | 'regularization'
     | 'payroll'
     | 'vault'
     | 'policy-admin'
-  >('attendance');
+    | 'gps-admin'
+  >(() =>
+    PermissionsService.isAdmin(currentEmployee)
+      ? 'who-is-in-office'
+      : 'attendance'
+  );
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [attendance, setAttendance] = useState<ShowupAttendanceRecord[]>([]);
@@ -711,9 +721,18 @@ export const ShowUpModule: React.FC<{
   ).length;
 
   const tabs = [
+    ...(isAdmin
+      ? [
+          {
+            id: 'who-is-in-office',
+            label: 'Who is in Office',
+            icon: <Users className="w-3.5 h-3.5" />,
+          },
+        ]
+      : []),
     {
       id: 'attendance',
-      label: 'Attendance & Virtual Punch',
+      label: isAdmin ? 'My Attendance Punch' : 'Attendance & Virtual Punch',
       icon: <Clock className="w-3.5 h-3.5" />,
     },
     {
@@ -739,8 +758,13 @@ export const ShowUpModule: React.FC<{
       icon: <FolderLock className="w-3.5 h-3.5" />,
       badge: visibleDocumentsCount,
     },
-    ...(isAdmin
+    ...(PermissionsService.canAccessEmployeeGpsLocations(currentEmployee)
       ? [
+          {
+            id: 'gps-admin',
+            label: 'Admin GPS Location Tracker',
+            icon: <MapPin className="w-3.5 h-3.5" />,
+          },
           {
             id: 'policy-admin',
             label: 'HRMS Policy & Holidays',
@@ -758,9 +782,31 @@ export const ShowUpModule: React.FC<{
         onChange={(id) => setActiveTab(id as any)}
       />
 
+      {/* TAB 0: WHO IS IN OFFICE (ADMIN DASHBOARD) */}
+      {activeTab === 'who-is-in-office' && isAdmin && (
+        <div className="space-y-5">
+          <WhoIsInOfficeDashboard
+            employees={employees}
+            attendanceRecords={attendance}
+            leaveRequests={leaveRequests}
+            holidays={holidays}
+            policy={policy}
+          />
+        </div>
+      )}
+
       {/* TAB 1: ATTENDANCE & VIRTUAL PUNCH */}
       {activeTab === 'attendance' && (
         <div className="space-y-5">
+          {isAdmin && (
+            <WhoIsInOfficeDashboard
+              employees={employees}
+              attendanceRecords={attendance}
+              leaveRequests={leaveRequests}
+              holidays={holidays}
+              policy={policy}
+            />
+          )}
           <PunchWidget
             currentEmployee={currentEmployee}
             todayRecord={todayRecord}
@@ -1346,7 +1392,17 @@ export const ShowUpModule: React.FC<{
         />
       )}
 
-      {/* TAB 6: HRMS POLICY OVERRIDES & HOLIDAYS (ADMIN) */}
+      {/* TAB 6: ADMIN GPS LOCATION TRACKER & GOOGLE MAPS (STRICTLY ADMIN ONLY) */}
+      {activeTab === 'gps-admin' &&
+        PermissionsService.canAccessEmployeeGpsLocations(currentEmployee) && (
+          <AdminGpsDashboard
+            currentEmployee={currentEmployee}
+            attendanceRecords={attendance}
+            employees={employees}
+          />
+        )}
+
+      {/* TAB 7: HRMS POLICY OVERRIDES & HOLIDAYS (ADMIN) */}
       {activeTab === 'policy-admin' && isAdmin && (
         <div className="space-y-6">
           <Card
