@@ -38,6 +38,7 @@ import { AttendanceCalendar } from './AttendanceCalendar';
 import { DocumentVaultView } from './DocumentVaultView';
 import { AdminGpsDashboard } from './AdminGpsDashboard';
 import { WhoIsInOfficeDashboard } from './WhoIsInOfficeDashboard';
+import { AdminMonthlyAttendanceRegister } from './AdminMonthlyAttendanceRegister';
 import type {
   Employee,
   ShowupAttendanceRecord,
@@ -59,6 +60,7 @@ export const ShowUpModule: React.FC<{
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<
     | 'who-is-in-office'
+    | 'monthly-register'
     | 'attendance'
     | 'leaves'
     | 'regularization'
@@ -728,6 +730,11 @@ export const ShowUpModule: React.FC<{
             label: 'Who is in Office',
             icon: <Users className="w-3.5 h-3.5" />,
           },
+          {
+            id: 'monthly-register',
+            label: 'Monthly & Past Attendance (All Employees)',
+            icon: <Calendar className="w-3.5 h-3.5" />,
+          },
         ]
       : []),
     {
@@ -784,13 +791,31 @@ export const ShowUpModule: React.FC<{
 
       {/* TAB 0: WHO IS IN OFFICE (ADMIN DASHBOARD) */}
       {activeTab === 'who-is-in-office' && isAdmin && (
-        <div className="space-y-5">
+        <div className="space-y-6">
           <WhoIsInOfficeDashboard
             employees={employees}
             attendanceRecords={attendance}
             leaveRequests={leaveRequests}
             holidays={holidays}
             policy={policy}
+          />
+          <AdminMonthlyAttendanceRegister
+            employees={employees}
+            attendanceRecords={attendance}
+            leaveRequests={leaveRequests}
+            holidays={holidays}
+          />
+        </div>
+      )}
+
+      {/* TAB 0B: MONTHLY & PAST ATTENDANCE REGISTER (ALL EMPLOYEES — ADMIN) */}
+      {activeTab === 'monthly-register' && isAdmin && (
+        <div className="space-y-5">
+          <AdminMonthlyAttendanceRegister
+            employees={employees}
+            attendanceRecords={attendance}
+            leaveRequests={leaveRequests}
+            holidays={holidays}
           />
         </div>
       )}
