@@ -123,7 +123,9 @@ export const ScorecardPrintView: React.FC<{
                   {item.scoringFormula}
                 </td>
                 <td className="px-3 py-2.5 text-xs font-mono">
-                  {item.target} {item.unit}
+                  {item.target !== undefined && item.target !== null
+                    ? `${item.target} ${item.unit}`
+                    : 'Optional'}
                 </td>
                 <td className="px-3 py-2.5 text-xs font-mono font-bold">
                   {item.actual} {item.unit}

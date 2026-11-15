@@ -35,6 +35,7 @@ export interface Employee {
     emergencyContactName: string;
     emergencyContactPhone: string;
     phone: string;
+    dateOfBirth?: string; // YYYY-MM-DD (used for Employee Events Calendar Birthdays)
   };
   employment: {
     workLocation: string;
@@ -53,6 +54,33 @@ export interface Employee {
     uanNumber?: string;
     passportNumber?: string;
   };
+  shiftConfig?: EmployeeShiftAssignment;
+  shiftHistory?: EmployeeShiftHistoryEntry[];
+}
+
+export interface EmployeeShiftAssignment {
+  shiftStart: string; // HH:mm e.g. '11:00'
+  shiftEnd: string;   // HH:mm e.g. '20:00'
+  effectiveDate: string; // YYYY-MM-DD
+  graceMinutes?: number; // default 35 (e.g. 09:30 -> 10:05 AM, 11:00 -> 11:35 AM)
+  isCustomShift: boolean;
+  updatedBy: string;
+  updatedAt: string;
+  remarks?: string;
+}
+
+export interface EmployeeShiftHistoryEntry {
+  id: string;
+  employeeId: string;
+  previousShiftStart: string;
+  previousShiftEnd: string;
+  newShiftStart: string;
+  newShiftEnd: string;
+  effectiveDate: string;
+  action: 'ASSIGNED' | 'UPDATED' | 'RESET_TO_DEFAULT';
+  changedBy: string;
+  changedAt: string;
+  remarks?: string;
 }
 
 // Form Builder Field Schema (stored in app_settings/employee_form_schema)
@@ -162,7 +190,7 @@ export interface PerformKpiMaster {
   title: string;
   description: string;
   category: PerformancePillar;
-  target: number;
+  target?: number; // Optional Default Target
   unit: string;
   weightage: number; // 15 KPIs per level summing to 100
   scoringFormula: ScoringFormula;
@@ -174,7 +202,7 @@ export interface PerformScorecardItem {
   title: string;
   description: string;
   category: string;
-  target: number;
+  target?: number; // Optional Default Target
   unit: string;
   weightage: number;
   scoringFormula: ScoringFormula;
@@ -341,22 +369,100 @@ export interface ShowupPolicyConfig {
   updatedAt: string;
 }
 
+export type LeaveCategorySection = 'EL' | 'CSL' | 'AL' | 'WFH';
+
 export type LeaveType =
+  | 'EL'
+  | 'CSL'
   | 'CL'
   | 'SL'
-  | 'EL'
   | 'Optional'
   | 'Maternity'
   | 'Paternity'
+  | 'Bereavement'
   | 'Comp Off'
+  | 'Special Leave'
   | 'LWP';
+
+export interface AdditionalLeaveTypeConfig {
+  id: string; // e.g. 'AL_MATERNITY', 'AL_PATERNITY', 'AL_BEREAVEMENT', 'AL_COMP_OFF', 'AL_SPECIAL', 'AL_LWP'
+  code: LeaveType | string;
+  name: string;
+  description: string;
+  annualAllocationDays: number;
+  eligibilityRule: string;
+  requiresApproval: boolean;
+  allowCarryForward: boolean;
+  isActive: boolean;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface LeaveTransactionEntry {
+  id: string;
+  employeeId: string;
+  employeeName?: string;
+  section: 'EL' | 'CSL' | 'AL' | 'WFH';
+  leaveType: string;
+  transactionType:
+    | 'OPENING_BALANCE'
+    | 'MONTHLY_CREDIT'
+    | 'LEAVE_USED'
+    | 'LATE_MARK_DEDUCTION'
+    | 'YEAR_END_CARRY_FORWARD'
+    | 'YEAR_END_LAPSE'
+    | 'ADMIN_ADJUSTMENT';
+  amount: number; // positive for credit/opening, negative for deduction/lapse
+  balanceAfter: number;
+  effectiveDate: string; // YYYY-MM-DD
+  monthKey?: string; // YYYY-MM for monthly accrual deduplication
+  yearKey?: string;  // YYYY for year-end carry-forward deduplication
+  remark: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface OpeningLeaveBalanceRecord {
+  id: string; // opening_employeeId
+  employeeId: string;
+  employeeName: string;
+  employeeEcode: string;
+  openingEL: number;
+  openingCSL: number;
+  openingAL: Record<string, number>; // e.g. { Maternity: 180, Paternity: 15, Bereavement: 5, 'Comp Off': 2 }
+  effectiveDate: string;
+  remark: string;
+  addedBy: string;
+  addedById: string;
+  addedAt: string;
+  updatedAt?: string;
+}
 
 export interface ShowupLeaveBalance {
   id: string; // employeeId
   employeeId: string;
-  balances: Record<LeaveType, number>;
+  balances: Record<string, number>;
+  // Detailed EL tracking (1.5/month, 50% carry-forward capped at 9 days)
+  elOpeningBalance?: number;
+  elMonthlyCredits?: number;
+  elCarriedForward?: number;
+  elLapsedAtYearEnd?: number;
+  elUsed?: number;
+  elAvailable?: number;
+  // Detailed CSL tracking (1.0/month, 0 carry-forward, 3 late marks = 0.5 CSL deduction)
+  cslOpeningBalance?: number;
+  cslMonthlyCredits?: number;
+  cslUsed?: number;
+  cslLateDeductions?: number;
+  cslLapsedAtYearEnd?: number;
+  cslAvailable?: number;
+  // Monthly accrual & year-end tracking flags
+  lastAccruedMonth?: string; // YYYY-MM
+  lastYearEndProcessed?: number; // YYYY
   lateMarksCount: number;
+  monthlyLateMarks?: Record<string, number>; // YYYY-MM -> count
   lateLeaveDeducted: number;
+  transactions?: LeaveTransactionEntry[];
   updatedAt: string;
 }
 
@@ -366,7 +472,8 @@ export interface ShowupLeaveRequest {
   employeeName: string;
   department: string;
   reportingManagerId: string;
-  leaveType: LeaveType;
+  section?: LeaveCategorySection; // 'EL' | 'CSL' | 'AL' | 'WFH'
+  leaveType: LeaveType | string;
   startDate: string; // YYYY-MM-DD
   endDate: string;   // YYYY-MM-DD
   days: number;
@@ -376,6 +483,106 @@ export interface ShowupLeaveRequest {
   reviewedBy?: string;
   reviewedAt?: string;
   managerComment?: string;
+}
+
+export interface ShowupWfhRequest {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeEcode?: string;
+  department: string;
+  reportingManagerId: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  days: number;
+  monthKey: string;  // YYYY-MM (for enforcing max 4 WFH days/month)
+  reason?: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  appliedAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewerComment?: string;
+}
+
+// 5. Employee Exit & Notice Period Workflow Types (GreytHR Reference)
+export type ExitWorkflowStage =
+  | 'Resignation Submitted'
+  | 'Manager Review'
+  | 'Work Plan Uploaded'
+  | 'HR Review'
+  | 'Notice Period Active'
+  | 'KT & Handover'
+  | 'Departmental Clearance'
+  | 'Asset Return'
+  | 'Final Settlement'
+  | 'Exit Confirmed';
+
+export interface ExitWorkPlanTask {
+  id: string;
+  projectOrResponsibility: string;
+  pendingTaskDescription: string;
+  handoverDetails: string;
+  ktRequirement: string;
+  deadline: string; // YYYY-MM-DD
+  handoverToEmployeeId: string;
+  handoverToEmployeeName: string;
+  status: 'Pending' | 'In Progress' | 'Completed';
+}
+
+export interface EmployeeExitRecord {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeEcode: string;
+  designation: string;
+  department: string;
+  reportingManagerId: string;
+  reportingManagerName: string;
+  resignationDate: string; // YYYY-MM-DD
+  noticePeriodDays: number;
+  proposedLastWorkingDay: string; // YYYY-MM-DD
+  approvedLastWorkingDay?: string; // YYYY-MM-DD
+  reasonCategory:
+    | 'Career Growth / Better Opportunity'
+    | 'Higher Education'
+    | 'Relocation / Personal'
+    | 'Health / Family Reasons'
+    | 'Role / Compensation Alignment'
+    | 'Other';
+  detailedReason: string;
+  currentStage: ExitWorkflowStage;
+  status: 'Active Exit Process' | 'Withdrawn' | 'Rejected' | 'Completed & Exited';
+  // Manager Work Plan Upload (Mandatory within 2 days of resignation submission)
+  workPlanDueDate: string; // ISO or YYYY-MM-DD (+2 days from resignation submission)
+  workPlanUploadedAt?: string;
+  workPlanUploadedBy?: string;
+  workPlanSummary?: string;
+  workPlanTasks: ExitWorkPlanTask[];
+  // 10-Stage Checklist statuses
+  stageChecklist: {
+    resignationSubmitted: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    managerReview: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    workPlanUpload: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    hrReview: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    noticePeriodTracking: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    ktAndHandover: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    departmentalClearance: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    assetReturn: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    finalSettlement: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+    finalExitConfirmation: { completed: boolean; completedAt?: string; actor?: string; notes?: string };
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 6. Employee Events Calendar Config (app_settings/events_calendar_config)
+export interface EventsCalendarConfig {
+  id: string; // 'events_calendar_config'
+  showBirthdaysToEmployees: boolean;
+  showAnniversariesToEmployees: boolean;
+  showJoiningDatesToEmployees: boolean;
+  updatedBy: string;
+  updatedAt: string;
 }
 
 export interface ShowupRegularization {

@@ -43,6 +43,7 @@ export const MyProfilePage: React.FC<{
 
   // Form states for selected employee
   const [phone, setPhone] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
   const [address, setAddress] = useState('');
   const [emergencyName, setEmergencyName] = useState('');
   const [emergencyPhone, setEmergencyPhone] = useState('');
@@ -85,6 +86,7 @@ export const MyProfilePage: React.FC<{
 
   useEffect(() => {
     setPhone(targetEmployee.personal?.phone || '');
+    setDateOfBirth(targetEmployee.personal?.dateOfBirth || '');
     setAddress(targetEmployee.personal?.address || '');
     setEmergencyName(targetEmployee.personal?.emergencyContactName || '');
     setEmergencyPhone(targetEmployee.personal?.emergencyContactPhone || '');
@@ -142,6 +144,7 @@ export const MyProfilePage: React.FC<{
       ...targetEmployee,
       personal: {
         phone: phone.trim(),
+        dateOfBirth: dateOfBirth.trim() || undefined,
         address: address.trim(),
         emergencyContactName: emergencyName.trim(),
         emergencyContactPhone: emergencyPhone.trim(),
@@ -371,6 +374,18 @@ export const MyProfilePage: React.FC<{
                 />
               </div>
               <div>
+                <label className="block text-xs font-bold text-neutral-700 mb-1">
+                  Date of Birth (Synced with Employee Events Calendar)
+                </label>
+                <input
+                  type="date"
+                  disabled={!canEditProfile}
+                  value={dateOfBirth}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                  className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg disabled:bg-neutral-100"
+                />
+              </div>
+              <div className="md:col-span-2">
                 <label className="block text-xs font-bold text-neutral-700 mb-1">
                   Residential Address
                 </label>

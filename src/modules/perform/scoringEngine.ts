@@ -22,11 +22,18 @@ export const MAX_SCORE = 100;
 export function calculateKpiScore(
   formula: ScoringFormula,
   actual: number,
-  target: number,
+  target?: number,
   maxScore: number = MAX_SCORE
 ): number {
   const safeActual = Number.isFinite(actual) ? actual : 0;
-  const safeTarget = Number.isFinite(target) && target > 0 ? target : 1;
+  // When Default Target is omitted or empty, evaluate actual directly against maxScore (100) or as pass/fail
+  if (target === undefined || target === null || !Number.isFinite(target) || target <= 0) {
+    if (formula === 'BOOLEAN_BINARY') {
+      return safeActual >= 1 ? maxScore : 0;
+    }
+    return Math.round(Math.max(0, Math.min(maxScore, safeActual)) * 100) / 100;
+  }
+  const safeTarget = target;
 
   switch (formula) {
     case 'DIRECT_PROPORTION': {

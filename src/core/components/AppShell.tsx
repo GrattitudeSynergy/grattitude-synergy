@@ -132,15 +132,19 @@ export const AppShell: React.FC<AppShellProps> = ({
         <div>
           {/* Brand Banner */}
           <div className="px-5 py-4 border-b border-neutral-200 flex items-center gap-3 bg-neutral-50/70">
-            <div className="w-9 h-9 rounded-lg bg-sky-600 text-white font-extrabold text-sm flex items-center justify-center tracking-tighter shrink-0 shadow-2xs">
-              GS
+            <div className="w-9 h-9 rounded-lg bg-white border border-neutral-200 flex items-center justify-center shrink-0 shadow-2xs p-1">
+              <img
+                src="/logo.png"
+                alt="Grattitude Synergy Logo"
+                className="w-full h-full object-contain"
+              />
             </div>
             <div className="min-w-0">
               <div className="text-sm font-bold text-neutral-900 truncate">
                 Grattitude Synergy
               </div>
               <div className="text-[11px] text-neutral-500 truncate">
-                Enterprise Portal • v1.0.0
+                Employee Portal
               </div>
             </div>
           </div>

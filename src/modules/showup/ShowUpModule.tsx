@@ -16,6 +16,8 @@ import {
   Umbrella,
   MapPin,
   Users,
+  Cake,
+  LogOut,
 } from 'lucide-react';
 import {
   Card,
@@ -39,6 +41,10 @@ import { DocumentVaultView } from './DocumentVaultView';
 import { AdminGpsDashboard } from './AdminGpsDashboard';
 import { WhoIsInOfficeDashboard } from './WhoIsInOfficeDashboard';
 import { AdminMonthlyAttendanceRegister } from './AdminMonthlyAttendanceRegister';
+import { ShiftManagementPanel } from './ShiftManagementPanel';
+import { LeaveManagementRestructured } from './LeaveManagementRestructured';
+import { EmployeeExitWorkflow } from './EmployeeExitWorkflow';
+import { EmployeeEventsCalendar } from './EmployeeEventsCalendar';
 import type {
   Employee,
   ShowupAttendanceRecord,
@@ -61,8 +67,11 @@ export const ShowUpModule: React.FC<{
   const [activeTab, setActiveTab] = useState<
     | 'who-is-in-office'
     | 'monthly-register'
+    | 'shift-management'
     | 'attendance'
     | 'leaves'
+    | 'events-calendar'
+    | 'exit-workflow'
     | 'regularization'
     | 'payroll'
     | 'vault'
@@ -238,6 +247,12 @@ export const ShowUpModule: React.FC<{
         return pol.compOffQuotaDays ?? 2;
       case 'LWP':
         return pol.lwpQuotaDays ?? 365;
+      case 'CSL':
+        return pol.slQuotaPerYear ?? 12;
+      case 'Bereavement':
+        return 5;
+      default:
+        return 12;
     }
   };
 
@@ -482,7 +497,17 @@ export const ShowUpModule: React.FC<{
         0,
         Math.round(((outH * 60 + outM - (inH * 60 + inM)) / 60) * 100) / 100
       );
-      const isLate = PolicyEngine.isPunchInLate(reg.requestedPunchIn, policy);
+      const targetEmp = employees.find(
+        (e) =>
+          e.id === reg.employeeId ||
+          e.ecode.replace(/^#/, '') === reg.employeeId.replace(/^#/, '')
+      );
+      const isLate = PolicyEngine.isPunchInLate(
+        reg.requestedPunchIn,
+        policy,
+        targetEmp,
+        reg.date
+      );
       const evalStatus = PolicyEngine.evaluateAttendanceStatus(
         totalHours,
         isLate,
@@ -735,6 +760,11 @@ export const ShowUpModule: React.FC<{
             label: 'Monthly & Past Attendance (All Employees)',
             icon: <Calendar className="w-3.5 h-3.5" />,
           },
+          {
+            id: 'shift-management',
+            label: 'Shift Management',
+            icon: <Clock className="w-3.5 h-3.5" />,
+          },
         ]
       : []),
     {
@@ -744,9 +774,19 @@ export const ShowUpModule: React.FC<{
     },
     {
       id: 'leaves',
-      label: 'Leave Management & Collision Detector',
+      label: 'Leave Management (EL / CSL / AL / WFH)',
       icon: <Calendar className="w-3.5 h-3.5" />,
       badge: pendingLeaveBadgeCount,
+    },
+    {
+      id: 'events-calendar',
+      label: 'Employee Events Calendar',
+      icon: <Cake className="w-3.5 h-3.5" />,
+    },
+    {
+      id: 'exit-workflow',
+      label: 'Exit & Notice Period',
+      icon: <LogOut className="w-3.5 h-3.5" />,
     },
     {
       id: 'regularization',
@@ -820,6 +860,15 @@ export const ShowUpModule: React.FC<{
         </div>
       )}
 
+      {/* TAB 0C: EMPLOYEE-SPECIFIC SHIFT MANAGEMENT (ADMIN CONTROL) */}
+      {activeTab === 'shift-management' && isAdmin && (
+        <ShiftManagementPanel
+          currentAdmin={currentEmployee}
+          employees={employees}
+          policy={policy}
+        />
+      )}
+
       {/* TAB 1: ATTENDANCE & VIRTUAL PUNCH */}
       {activeTab === 'attendance' && (
         <div className="space-y-5">
@@ -842,225 +891,31 @@ export const ShowUpModule: React.FC<{
         </div>
       )}
 
-      {/* TAB 2: LEAVE MANAGEMENT & COLLISION DETECTOR */}
+      {/* TAB 2: COMPLETE LEAVE MANAGEMENT (EL, CSL, AL, WFH + ADMIN OPENING BALANCES) */}
       {activeTab === 'leaves' && (
-        <div className="space-y-5">
-          {/* 8 Statutory Leave Balances */}
-          <Card
-            title="8 Statutory Leave Balances & Late-Mark Deduction Ledger"
-            subtitle={`Rule: ${policy.lateMarksPerDeduction} late marks trigger an automated deduction of ${policy.lateDeductionDays} days of leave. EL requires ${policy.elAdvanceNoticeDays}-day advance notice.`}
-            action={
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Plus className="w-4 h-4" />}
-                onClick={() => {
-                  setLeaveError('');
-                  setLeaveModalOpen(true);
-                }}
-              >
-                Apply for Leave
-              </Button>
-            }
-          >
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 mb-4">
-              {STATUTORY_LEAVE_TYPES.map((lt) => {
-                const bal = getEmployeeLeaveBalance(currentEmployee.id, lt);
-                const annualQuota = getPolicyQuotaForType(lt);
-                return (
-                  <div
-                    key={lt}
-                    className="p-3 bg-neutral-50 border border-neutral-200 rounded-lg text-center"
-                  >
-                    <div className="text-[11px] font-bold text-neutral-600">
-                      {lt}
-                    </div>
-                    <div className="text-base font-extrabold text-neutral-900 mt-0.5">
-                      {bal} <span className="text-[10px] font-normal">days</span>
-                    </div>
-                    <div className="text-[10px] text-neutral-400 mt-0.5">
-                      Quota: {annualQuota}/yr
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        <LeaveManagementRestructured
+          currentEmployee={currentEmployee}
+          employees={employees}
+          policy={policy}
+          leaveBalances={leaveBalances}
+          leaveRequests={leaveRequests}
+        />
+      )}
 
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
-              <span>
-                <strong>Late-Mark Counter:</strong>{' '}
-                {myLeaveBalance?.lateMarksCount || 0} late mark(s) recorded
-              </span>
-              <span>
-                <strong>Automated Leave Deduction Applied:</strong>{' '}
-                {myLeaveBalance?.lateLeaveDeducted || 0} day(s)
-              </span>
-            </div>
-          </Card>
+      {/* TAB 2B: EMPLOYEE EVENTS CALENDAR (BIRTHDAYS, ANNIVERSARIES, DOJ) */}
+      {activeTab === 'events-calendar' && (
+        <EmployeeEventsCalendar
+          currentEmployee={currentEmployee}
+          employees={employees}
+        />
+      )}
 
-          {/* Manager & Admin Approval Queue (Strictly visible ONLY to Reporting Manager & Admin) */}
-          {canAccessManagerApprovalQueue && (
-            <Card
-              title={
-                isAdmin
-                  ? 'Organization Leave Approval Queue & Collision Detector (Admin View)'
-                  : 'Direct Reports Leave Approval Queue & Collision Detector (Manager View)'
-              }
-              subtitle="Strictly restricted: Only leave requests from your direct reports (or all employees for Admin) are visible here."
-            >
-              {approvalQueueLeaveRequests.length === 0 ? (
-                <EmptyState
-                  title="No Direct-Report Leave Requests in Queue"
-                  description="Leave applications submitted by employees reporting to you will appear here for approval."
-                />
-              ) : (
-                <Table
-                  headers={[
-                    'Employee',
-                    'Leave Type',
-                    'Date Range & Days',
-                    'Reason',
-                    'Collision Detector Alert',
-                    'Status',
-                    'Manager / Admin Actions',
-                  ]}
-                >
-                  {approvalQueueLeaveRequests.map((req) => {
-                    const collisions = PolicyEngine.detectLeaveCollisions(
-                      req,
-                      approvalQueueLeaveRequests
-                    );
-                    return (
-                      <tr key={req.id} className="hover:bg-neutral-50">
-                        <td className="px-4 py-3 text-xs font-bold text-neutral-900">
-                          {req.employeeName}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant="info">{req.leaveType}</Badge>
-                        </td>
-                        <td className="px-4 py-3 text-xs font-mono">
-                          {req.startDate} → {req.endDate} ({req.days}d)
-                        </td>
-                        <td className="px-4 py-3 text-xs text-neutral-600">
-                          {req.reason}
-                        </td>
-                        <td className="px-4 py-3">
-                          {collisions.length > 0 ? (
-                            <div className="p-2 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-900 flex items-start gap-1.5">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                              <div>
-                                <strong>Collision Alert:</strong> Overlaps with{' '}
-                                {collisions.map((c) => c.employeeName).join(', ')}
-                              </div>
-                            </div>
-                          ) : (
-                            <Badge variant="success">No Team Overlap</Badge>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge
-                            variant={
-                              req.status === 'Approved'
-                                ? 'success'
-                                : req.status === 'Rejected'
-                                ? 'danger'
-                                : 'warning'
-                            }
-                          >
-                            {req.status}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          {req.status === 'Pending' ? (
-                            <div className="flex items-center gap-1.5">
-                              <Button
-                                size="xs"
-                                variant="success"
-                                onClick={() =>
-                                  handleReviewLeave(req, 'Approved')
-                                }
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="xs"
-                                variant="danger"
-                                onClick={() =>
-                                  handleReviewLeave(req, 'Rejected')
-                                }
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-neutral-400">
-                              Reviewed by {req.reviewedBy}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </Table>
-              )}
-            </Card>
-          )}
-
-          {/* Personal Leave Requests Submitted by Current Employee */}
-          <Card
-            title="My Submitted Leave Applications"
-            subtitle="Your personal leave requests sent to your Reporting Manager and Admin."
-          >
-            {myOwnLeaveRequests.length === 0 ? (
-              <EmptyState
-                title="You Have Not Submitted Any Leave Requests"
-                description="Click 'Apply for Leave' above to submit a leave request to your Reporting Manager."
-              />
-            ) : (
-              <Table
-                headers={[
-                  'Leave Type',
-                  'Date Range & Days',
-                  'Reason',
-                  'Status',
-                  'Review Details',
-                ]}
-              >
-                {myOwnLeaveRequests.map((req) => (
-                  <tr key={req.id} className="hover:bg-neutral-50">
-                    <td className="px-4 py-3">
-                      <Badge variant="info">{req.leaveType}</Badge>
-                    </td>
-                    <td className="px-4 py-3 text-xs font-mono">
-                      {req.startDate} → {req.endDate} ({req.days}d)
-                    </td>
-                    <td className="px-4 py-3 text-xs text-neutral-600">
-                      {req.reason}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge
-                        variant={
-                          req.status === 'Approved'
-                            ? 'success'
-                            : req.status === 'Rejected'
-                            ? 'danger'
-                            : 'warning'
-                        }
-                      >
-                        {req.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-neutral-500">
-                      {req.status === 'Pending'
-                        ? 'Pending Manager / Admin Approval'
-                        : `Reviewed by ${req.reviewedBy || 'Manager'}`}
-                    </td>
-                  </tr>
-                ))}
-              </Table>
-            )}
-          </Card>
-        </div>
+      {/* TAB 2C: EMPLOYEE EXIT & NOTICE PERIOD WORKFLOW (GREYTHR STYLE) */}
+      {activeTab === 'exit-workflow' && (
+        <EmployeeExitWorkflow
+          currentEmployee={currentEmployee}
+          employees={employees}
+        />
       )}
 
       {/* TAB 3: REGULARIZATION REQUEST FLOW */}

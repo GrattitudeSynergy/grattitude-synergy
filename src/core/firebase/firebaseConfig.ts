@@ -102,6 +102,10 @@ const ALL_COLLECTION_NAMES = [
   'showup_attendance',
   'showup_leave_requests',
   'showup_leave_balances',
+  'showup_additional_leave_types',
+  'showup_opening_leave_balances',
+  'showup_wfh_requests',
+  'showup_exit_requests',
   'showup_regularizations',
   'showup_holidays',
   'showup_salary_structures',
@@ -117,6 +121,7 @@ const OBSOLETE_TEST_EMPLOYEE_IDS = new Set(['EMP-002', 'GSL0000']);
 // Collections protected by strict Database-Level Row-Level Security (RLS)
 const RLS_PROTECTED_REQUEST_COLLECTIONS = new Set([
   'showup_leave_requests',
+  'showup_wfh_requests',
   'showup_regularizations',
 ]);
 

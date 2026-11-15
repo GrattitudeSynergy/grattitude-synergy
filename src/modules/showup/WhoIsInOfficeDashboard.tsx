@@ -144,15 +144,21 @@ export const WhoIsInOfficeDashboard: React.FC<WhoIsInOfficeProps> = ({
       holidayName?: string;
     }> = [];
 
-    const expectedInTimeStr = `${policy.shiftStart || '09:30'}:00`;
-    const [shiftH, shiftM] = (policy.shiftStart || '09:30')
-      .split(':')
-      .map(Number);
-    const shiftMinutes = shiftH * 60 + shiftM;
-
     for (const emp of activeEmployees) {
       const normId = PermissionsService.normalizeEmpId(emp.id);
       const normEcode = PermissionsService.normalizeEmpId(emp.ecode);
+
+      // Resolve employee-specific shift timings (or company default shift)
+      const empShift = PolicyEngine.getEffectiveShiftForEmployee(
+        emp,
+        policy,
+        selectedDate
+      );
+      const expectedInTimeStr = `${empShift.shiftStart || '09:30'}:00`;
+      const [shiftH, shiftM] = (empShift.shiftStart || '09:30')
+        .split(':')
+        .map(Number);
+      const shiftMinutes = shiftH * 60 + shiftM;
 
       // Check leave first
       const approvedLeave = leaveByEmpMap.get(normId) || leaveByEmpMap.get(normEcode);
@@ -222,7 +228,12 @@ export const WhoIsInOfficeDashboard: React.FC<WhoIsInOfficeProps> = ({
           ).padStart(2, '0')}:${String(punchSecs).padStart(2, '0')}`;
         }
 
-        const isLate = PolicyEngine.isPunchInLate(firstIn.timestamp, policy);
+        const isLate = PolicyEngine.isPunchInLate(
+          firstIn.timestamp,
+          policy,
+          emp,
+          selectedDate
+        );
 
         if (isLate) {
           const punchTotalMins = punchHours * 60 + punchMins;

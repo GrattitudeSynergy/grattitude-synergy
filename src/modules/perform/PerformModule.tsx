@@ -176,7 +176,11 @@ export const PerformModule: React.FC<{
 
     const items: PerformScorecardItem[] = levelKpis.map((k) => {
       const initialActual =
-        k.scoringFormula === 'BOOLEAN_BINARY' ? 1 : k.target;
+        k.scoringFormula === 'BOOLEAN_BINARY'
+          ? 1
+          : k.target !== undefined && k.target !== null
+          ? k.target
+          : 100;
       const initialScore = calculateKpiScore(
         k.scoringFormula,
         initialActual,
@@ -195,7 +199,10 @@ export const PerformModule: React.FC<{
         selfScore: initialScore,
         managerScore: 0,
         ceoScore: 0,
-        selfJustification: `Achieved benchmark target of ${initialActual} ${k.unit} during ${fiscalYear} ${quarter}.`,
+        selfJustification:
+          k.target !== undefined && k.target !== null
+            ? `Achieved benchmark target of ${initialActual} ${k.unit} during ${fiscalYear} ${quarter}.`
+            : `Achieved performance score of ${initialActual} during ${fiscalYear} ${quarter}.`,
         managerComments: '',
       };
     });
@@ -813,7 +820,9 @@ export const PerformModule: React.FC<{
                           </Badge>
                         </td>
                         <td className="px-3 py-3 text-xs font-mono whitespace-nowrap">
-                          {item.target} {item.unit}
+                          {item.target !== undefined && item.target !== null
+                            ? `${item.target} ${item.unit}`
+                            : `Optional (${item.unit})`}
                         </td>
                         <td className="px-3 py-3 w-32">
                           {item.scoringFormula === 'BOOLEAN_BINARY' ? (
@@ -1234,10 +1243,14 @@ export const PerformModule: React.FC<{
                     <input
                       type="number"
                       step="any"
-                      value={item.target}
+                      placeholder="Optional"
+                      value={item.target ?? ''}
                       onChange={(e) =>
                         handleUpdateScorecardItem(targetModalSc, item.kpiId, {
-                          target: Number(e.target.value),
+                          target:
+                            e.target.value.trim() === ''
+                              ? undefined
+                              : Number(e.target.value),
                         })
                       }
                       className="w-24 px-2 py-1 text-xs font-mono border border-neutral-300 rounded-lg"

@@ -43,15 +43,19 @@ export const LoginScreen: React.FC = () => {
         {/* Brand Header (Light Mode) */}
         <div className="bg-neutral-50 px-7 py-6 text-neutral-900 border-b border-neutral-200">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-sky-600 text-white flex items-center justify-center font-extrabold text-base tracking-tighter shadow-xs">
-              GS
+            <div className="w-10 h-10 rounded-lg bg-white border border-neutral-200 flex items-center justify-center shadow-xs p-1 shrink-0">
+              <img
+                src="/logo.png"
+                alt="Grattitude Synergy Logo"
+                className="w-full h-full object-contain"
+              />
             </div>
             <div>
               <h1 className="text-base font-bold tracking-tight text-neutral-900">
                 Grattitude Synergy
               </h1>
               <p className="text-xs text-neutral-500">
-                Employee Enterprise Portal • v1.0.0
+                Employee Portal
               </p>
             </div>
           </div>
@@ -128,7 +132,7 @@ export const LoginScreen: React.FC = () => {
 
       <div className="mt-4 flex items-center gap-2 text-xs text-neutral-500">
         <Building2 className="w-3.5 h-3.5" />
-        <span>Grattitude Synergy — Persistent Multi-Tab Firestore Engine</span>
+        <span>Grattitude Synergy — Employee Portal</span>
       </div>
     </div>
   );

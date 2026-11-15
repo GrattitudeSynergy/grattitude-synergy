@@ -14,6 +14,7 @@ import type {
   PerformGradeConfig,
   FiscalSettings,
   DynamicFormField,
+  AdditionalLeaveTypeConfig,
 } from './types';
 
 // ============================================================================
@@ -83,6 +84,7 @@ export const SEED_ADMIN_EMPLOYEE: Employee = {
     emergencyContactName: 'Corporate Security Desk',
     emergencyContactPhone: '+91 80 4090 1100',
     phone: '+91 98450 00001',
+    dateOfBirth: '1988-11-18',
   },
   employment: {
     workLocation: 'Bengaluru HQ (Hybrid)',
@@ -214,6 +216,35 @@ export const SEED_INITIAL_EMPLOYEES: Employee[] = [
     passwordHash: DEFAULT_EMPLOYEE_PASSWORD,
     updatedAt: '2026-11-04T00:00:00.000Z',
     ...EMPTY_PROFILE_DETAILS,
+    personal: {
+      ...EMPTY_PROFILE_DETAILS.personal,
+      dateOfBirth: '1997-11-22',
+    },
+    shiftConfig: {
+      shiftStart: '11:00',
+      shiftEnd: '20:00',
+      effectiveDate: '2026-11-01',
+      graceMinutes: 35,
+      isCustomShift: true,
+      updatedBy: 'Corporate Super Admin',
+      updatedAt: '2026-11-01T09:00:00.000Z',
+      remarks: 'Individual shift timing assigned: 11:00 AM to 8:00 PM',
+    },
+    shiftHistory: [
+      {
+        id: 'shift_hist_aditi_1',
+        employeeId: '#GSL014',
+        previousShiftStart: '09:30',
+        previousShiftEnd: '18:30',
+        newShiftStart: '11:00',
+        newShiftEnd: '20:00',
+        effectiveDate: '2026-11-01',
+        action: 'ASSIGNED',
+        changedBy: 'Corporate Super Admin',
+        changedAt: '2026-11-01T09:00:00.000Z',
+        remarks: 'Assigned custom shift 11:00 AM – 8:00 PM',
+      },
+    ],
   },
   {
     id: '#GSL016',
@@ -609,15 +640,15 @@ export const SEED_SHOWUP_POLICY: ShowupPolicyConfig = {
   shiftStart: '09:30',
   shiftEnd: '18:30',
   standardHours: 9.0,
-  graceCutoff: '10:00',
+  graceCutoff: '10:05',
   lateMarksPerDeduction: 3,
   lateDeductionDays: 0.5,
   halfDayMinHours: 4.5,
   fullDayMinHours: 7.0,
   elAdvanceNoticeDays: 5,
-  clQuotaPerYear: 0,
+  clQuotaPerYear: 12,
   slQuotaPerYear: 12,
-  elQuotaPerYear: 12,
+  elQuotaPerYear: 18,
   optionalHolidaysPerYear: 3,
   wfhRemoteDaysPerMonth: 4,
   compOffApplyWindowDays: 2,
@@ -628,6 +659,93 @@ export const SEED_SHOWUP_POLICY: ShowupPolicyConfig = {
   lwpQuotaDays: 365,
   updatedAt: new Date().toISOString(),
 };
+
+export const SEED_ADDITIONAL_LEAVE_TYPES: AdditionalLeaveTypeConfig[] = [
+  {
+    id: 'AL_MATERNITY',
+    code: 'Maternity',
+    name: 'Maternity Leave',
+    description: 'Statutory paid maternity leave under the Maternity Benefit Act.',
+    annualAllocationDays: 180,
+    eligibilityRule: 'Eligible female employees as per statutory norms.',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+  {
+    id: 'AL_PATERNITY',
+    code: 'Paternity',
+    name: 'Paternity Leave',
+    description: 'Paid paternity leave for new fathers within 6 months of childbirth.',
+    annualAllocationDays: 15,
+    eligibilityRule: 'Confirmed male employees upon childbirth.',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+  {
+    id: 'AL_BEREAVEMENT',
+    code: 'Bereavement',
+    name: 'Bereavement Leave',
+    description: 'Compassionate leave in the event of loss of an immediate family member.',
+    annualAllocationDays: 5,
+    eligibilityRule: 'All active employees.',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+  {
+    id: 'AL_COMP_OFF',
+    code: 'Comp Off',
+    name: 'Compensatory Off',
+    description: 'Earned for working on an official holiday or weekend with manager approval.',
+    annualAllocationDays: 4,
+    eligibilityRule: 'Apply within 2 working days; valid for 30 days.',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+  {
+    id: 'AL_OPTIONAL',
+    code: 'Optional',
+    name: 'Optional / Restricted Holiday',
+    description: 'Elective festival or regional holidays selected from the corporate list.',
+    annualAllocationDays: 3,
+    eligibilityRule: 'All active employees (max 3 per calendar year).',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+  {
+    id: 'AL_SPECIAL',
+    code: 'Special Leave',
+    name: 'Marriage / Special Company-Approved Leave',
+    description: 'Special company-approved leave for marriage or exceptional events.',
+    annualAllocationDays: 5,
+    eligibilityRule: 'Confirmed employees with prior HR & Manager approval.',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+  {
+    id: 'AL_LWP',
+    code: 'LWP',
+    name: 'Leave Without Pay (LWP)',
+    description: 'Approved unpaid leave when paid leave balances are exhausted.',
+    annualAllocationDays: 365,
+    eligibilityRule: 'Subject to Reporting Manager and HR approval.',
+    requiresApproval: true,
+    allowCarryForward: false,
+    isActive: true,
+    updatedAt: '2026-11-04T00:00:00.000Z',
+  },
+];
 
 export const SEED_COMPENSATION_LOCK: CompensationLockConfig = {
   id: 'global_lock',
@@ -827,6 +945,25 @@ export async function initializeSeedData(): Promise<void> {
       await FirestoreEngine.setDocument('employees', seedEmp.id, seedEmp, {
         skipCloudPush: true,
       });
+    } else if (
+      seedEmp.id === '#GSL014' &&
+      !existingEmp.shiftConfig &&
+      seedEmp.shiftConfig
+    ) {
+      await FirestoreEngine.setDocument(
+        'employees',
+        seedEmp.id,
+        {
+          ...existingEmp,
+          personal: {
+            ...existingEmp.personal,
+            dateOfBirth: existingEmp.personal?.dateOfBirth || seedEmp.personal.dateOfBirth,
+          },
+          shiftConfig: seedEmp.shiftConfig,
+          shiftHistory: seedEmp.shiftHistory,
+        },
+        { skipCloudPush: true }
+      );
     }
 
     const existingBalance = await FirestoreEngine.getDocument(
@@ -841,19 +978,81 @@ export async function initializeSeedData(): Promise<void> {
           id: seedEmp.id,
           employeeId: seedEmp.id,
           balances: {
-            CL: SEED_SHOWUP_POLICY.clQuotaPerYear ?? 0,
+            EL: 1.5,
+            CSL: 1.0,
+            CL: SEED_SHOWUP_POLICY.clQuotaPerYear ?? 12,
             SL: SEED_SHOWUP_POLICY.slQuotaPerYear ?? 12,
-            EL: SEED_SHOWUP_POLICY.elQuotaPerYear ?? 12,
             Optional: SEED_SHOWUP_POLICY.optionalHolidaysPerYear ?? 3,
             Maternity: SEED_SHOWUP_POLICY.maternityQuotaDays ?? 180,
             Paternity: SEED_SHOWUP_POLICY.paternityQuotaDays ?? 15,
-            'Comp Off': SEED_SHOWUP_POLICY.compOffQuotaDays ?? 2,
+            Bereavement: 5,
+            'Comp Off': SEED_SHOWUP_POLICY.compOffQuotaDays ?? 4,
+            'Special Leave': 5,
             LWP: SEED_SHOWUP_POLICY.lwpQuotaDays ?? 365,
           },
+          elOpeningBalance: 0,
+          elMonthlyCredits: 1.5,
+          elCarriedForward: 0,
+          elLapsedAtYearEnd: 0,
+          elUsed: 0,
+          elAvailable: 1.5,
+          cslOpeningBalance: 0,
+          cslMonthlyCredits: 1.0,
+          cslUsed: 0,
+          cslLateDeductions: 0,
+          cslLapsedAtYearEnd: 0,
+          cslAvailable: 1.0,
+          lastAccruedMonth: new Date().toISOString().slice(0, 7),
+          lastYearEndProcessed: new Date().getFullYear(),
           lateMarksCount: 0,
           lateLeaveDeducted: 0,
+          transactions: [
+            {
+              id: `tx_init_el_${seedEmp.id}`,
+              employeeId: seedEmp.id,
+              employeeName: seedEmp.name,
+              section: 'EL',
+              leaveType: 'EL',
+              transactionType: 'MONTHLY_CREDIT',
+              amount: 1.5,
+              balanceAfter: 1.5,
+              effectiveDate: `${new Date().toISOString().slice(0, 7)}-01`,
+              monthKey: new Date().toISOString().slice(0, 7),
+              remark: `Automated monthly EL accrual (+1.5 EL for ${new Date().toISOString().slice(0, 7)})`,
+              createdBy: 'HRMS Accrual Engine',
+              createdAt: '2026-11-01T00:00:00.000Z',
+            },
+            {
+              id: `tx_init_csl_${seedEmp.id}`,
+              employeeId: seedEmp.id,
+              employeeName: seedEmp.name,
+              section: 'CSL',
+              leaveType: 'CSL',
+              transactionType: 'MONTHLY_CREDIT',
+              amount: 1.0,
+              balanceAfter: 1.0,
+              effectiveDate: `${new Date().toISOString().slice(0, 7)}-01`,
+              monthKey: new Date().toISOString().slice(0, 7),
+              remark: `Automated monthly CSL accrual (+1.0 CSL for ${new Date().toISOString().slice(0, 7)})`,
+              createdBy: 'HRMS Accrual Engine',
+              createdAt: '2026-11-01T00:00:00.000Z',
+            },
+          ],
           updatedAt: '2026-11-04T00:00:00.000Z',
         },
+        { skipCloudPush: true }
+      );
+    }
+  }
+
+  // Ensure default Additional Leave Types (AL) exist in showup_additional_leave_types
+  const existingAlTypes = await FirestoreEngine.getCollection('showup_additional_leave_types');
+  if (existingAlTypes.length === 0) {
+    for (const alType of SEED_ADDITIONAL_LEAVE_TYPES) {
+      await FirestoreEngine.setDocument(
+        'showup_additional_leave_types',
+        alType.id,
+        alType,
         { skipCloudPush: true }
       );
     }

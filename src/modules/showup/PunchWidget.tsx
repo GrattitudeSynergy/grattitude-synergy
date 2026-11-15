@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { Card, Button, Badge, useToast } from '../../core/components/DesignSystem';
 import { FirestoreEngine } from '../../core/firebase/firebaseConfig';
-import { PolicyEngine } from './policyEngine';
+import { PolicyEngine, formatTime12Hour } from './policyEngine';
 import type {
   Employee,
   ShowupAttendanceRecord,
@@ -99,6 +99,13 @@ export const PunchWidget: React.FC<{
   const punches = todayRecord?.punches || [];
   const lastPunch = punches.length > 0 ? punches[punches.length - 1] : null;
   const isClockedIn = lastPunch?.type === 'IN';
+
+  // Resolve employee's individual shift (e.g. Aditi 11:00–20:00) or company default shift (09:30–18:30)
+  const effectiveShift = PolicyEngine.getEffectiveShiftForEmployee(
+    currentEmployee,
+    policy,
+    todayStr
+  );
 
   // Calculate live elapsed hours if currently clocked in
   const calculateElapsedHours = (): number => {
@@ -242,7 +249,12 @@ export const PunchWidget: React.FC<{
     try {
       const isFirstPunch = punches.length === 0;
       const isLate = isFirstPunch
-        ? PolicyEngine.isPunchInLate(serverTimestamp, policy)
+        ? PolicyEngine.isPunchInLate(
+            serverTimestamp,
+            policy,
+            currentEmployee,
+            todayStr
+          )
         : Boolean(todayRecord?.isLate);
 
       const nextPunches = [
@@ -275,44 +287,100 @@ export const PunchWidget: React.FC<{
 
       await FirestoreEngine.setDocument('showup_attendance', recordId, newRecord);
 
-      // If first punch of the day is late, increment lateMarksCount & apply 3-late-marks = 0.5 day deduction rule
+      // If first punch of the day is late, increment lateMarksCount & apply 3-late-marks = 0.5 CSL deduction rule
       if (isFirstPunch && isLate) {
-        const currentLateMarks = (leaveBalance?.lateMarksCount || 0) + 1;
+        const prevLateMarks = leaveBalance?.lateMarksCount || 0;
+        const currentLateMarks = prevLateMarks + 1;
+        const prevDeduction = PolicyEngine.calculateLateLeaveDeduction(
+          prevLateMarks,
+          policy
+        );
         const totalDeduction = PolicyEngine.calculateLateLeaveDeduction(
           currentLateMarks,
           policy
         );
+        const isThirdLateMarkTriggered = totalDeduction > prevDeduction;
+        const monthKey = todayStr.slice(0, 7);
+        const nextMonthlyLateMarks = {
+          ...(leaveBalance?.monthlyLateMarks || {}),
+          [monthKey]: ((leaveBalance?.monthlyLateMarks || {})[monthKey] || 0) + 1,
+        };
+
+        const existingBalances = leaveBalance?.balances || {
+          EL: 1.5,
+          CSL: 1.0,
+          CL: policy.clQuotaPerYear ?? 12,
+          SL: policy.slQuotaPerYear ?? 12,
+          Optional: policy.optionalHolidaysPerYear ?? 3,
+          Maternity: policy.maternityQuotaDays ?? 180,
+          Paternity: policy.paternityQuotaDays ?? 15,
+          Bereavement: 5,
+          'Comp Off': policy.compOffQuotaDays ?? 4,
+          'Special Leave': 5,
+          LWP: policy.lwpQuotaDays ?? 365,
+        };
+
+        const currentCslBal =
+          existingBalances.CSL ??
+          leaveBalance?.cslAvailable ??
+          1.0;
+        const nextCslBal = isThirdLateMarkTriggered
+          ? Math.max(0, Math.round((currentCslBal - 0.5) * 100) / 100)
+          : currentCslBal;
+
+        const nextTransactions = [...(leaveBalance?.transactions || [])];
+        if (isThirdLateMarkTriggered) {
+          nextTransactions.unshift({
+            id: `tx_late_csl_${Date.now()}`,
+            employeeId: currentEmployee.id,
+            employeeName: currentEmployee.name,
+            section: 'CSL',
+            leaveType: 'CSL',
+            transactionType: 'LATE_MARK_DEDUCTION',
+            amount: -0.5,
+            balanceAfter: nextCslBal,
+            effectiveDate: todayStr,
+            monthKey,
+            remark: `Automated 0.5 CSL deduction on reaching ${currentLateMarks} late marks (3-late-marks policy).`,
+            createdBy: 'Attendance Policy Engine',
+            createdAt: new Date().toISOString(),
+          });
+        }
+
         await FirestoreEngine.setDocument(
           'showup_leave_balances',
           currentEmployee.id,
           {
+            ...leaveBalance,
             id: currentEmployee.id,
             employeeId: currentEmployee.id,
-            balances: leaveBalance?.balances || {
-              CL: policy.clQuotaPerYear ?? 0,
-              SL: policy.slQuotaPerYear ?? 12,
-              EL: policy.elQuotaPerYear ?? 12,
-              Optional: policy.optionalHolidaysPerYear ?? 3,
-              Maternity: policy.maternityQuotaDays ?? 180,
-              Paternity: policy.paternityQuotaDays ?? 15,
-              'Comp Off': policy.compOffQuotaDays ?? 2,
-              LWP: policy.lwpQuotaDays ?? 365,
+            balances: {
+              ...existingBalances,
+              CSL: nextCslBal,
             },
+            cslAvailable: nextCslBal,
+            cslLateDeductions: totalDeduction,
             lateMarksCount: currentLateMarks,
+            monthlyLateMarks: nextMonthlyLateMarks,
             lateLeaveDeducted: totalDeduction,
+            transactions: nextTransactions,
             updatedAt: new Date().toISOString(),
           }
         );
         showToast(
           'warning',
-          'Checked In (Late Mark Recorded)',
-          `Check-in after ${policy.graceCutoff} AM marked as Late (${currentLateMarks} late mark(s) total).`
+          isThirdLateMarkTriggered
+            ? '3rd Late Mark Reached — 0.5 CSL Deducted'
+            : 'Checked In (Late Mark Recorded)',
+          isThirdLateMarkTriggered
+            ? `Check-in after ${formatTime12Hour(effectiveShift.graceCutoff)} recorded as Late #${currentLateMarks}. 0.5 day automatically deducted from CSL balance.`
+            : `Check-in after ${formatTime12Hour(effectiveShift.graceCutoff)} marked as Late (${currentLateMarks} late mark(s) total).`
         );
       } else {
         showToast(
           'success',
           'Checked In Successfully',
-          `Attendance recorded at ${new Date(serverTimestamp).toLocaleTimeString()}.`
+          `Attendance recorded at ${new Date(serverTimestamp).toLocaleTimeString()} (On-Time within ${formatTime12Hour(effectiveShift.graceCutoff)} grace window).`
         );
       }
     } finally {
@@ -411,7 +479,7 @@ export const PunchWidget: React.FC<{
           <span>Virtual Attendance Punch Terminal</span>
         </div>
       }
-      subtitle={`Shift: ${policy.shiftStart}–${policy.shiftEnd} (${policy.standardHours}h) • Grace Cutoff: ${policy.graceCutoff} AM`}
+      subtitle={`Shift: ${formatTime12Hour(effectiveShift.shiftStart)} – ${formatTime12Hour(effectiveShift.shiftEnd)} (${effectiveShift.standardHours}h)${effectiveShift.isCustomShift ? ' [Assigned Individual Shift]' : ''} • Grace Period Until: ${formatTime12Hour(effectiveShift.graceCutoff)}`}
       action={
         <Badge variant={isClockedIn ? 'success' : 'neutral'}>
           {isClockedIn ? 'ACTIVE SHIFT IN PROGRESS' : 'OFF CLOCK'}
@@ -474,10 +542,36 @@ export const PunchWidget: React.FC<{
 
           <div className="pt-2.5 border-t border-neutral-200 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="text-neutral-600">
-              Shift: <strong>{policy.shiftStart}–{policy.shiftEnd}</strong> ({policy.standardHours}h)
+              Shift:{' '}
+              <strong>
+                {formatTime12Hour(effectiveShift.shiftStart)} –{' '}
+                {formatTime12Hour(effectiveShift.shiftEnd)}
+              </strong>{' '}
+              ({effectiveShift.standardHours}h)
+              {effectiveShift.isCustomShift && (
+                <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-bold bg-sky-100 text-sky-800 rounded-sm">
+                  Individual Shift
+                </span>
+              )}
             </span>
             <span className="text-amber-800 font-medium">
-              Grace Cutoff: <strong>{policy.graceCutoff} AM</strong>
+              Grace Period Until:{' '}
+              <strong>{formatTime12Hour(effectiveShift.graceCutoff)}</strong>
+            </span>
+          </div>
+          <div className="pt-2 border-t border-neutral-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-neutral-600">
+            <span>
+              Late Marks Recorded:{' '}
+              <strong className="text-amber-700">
+                {leaveBalance?.lateMarksCount || 0}
+              </strong>{' '}
+              (Every 3 late marks = 0.5 CSL deduction)
+            </span>
+            <span>
+              CSL Deducted:{' '}
+              <strong className="text-rose-700">
+                {leaveBalance?.lateLeaveDeducted || 0} day(s)
+              </strong>
             </span>
           </div>
         </div>

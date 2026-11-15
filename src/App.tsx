@@ -59,11 +59,15 @@ export const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-neutral-50 text-neutral-900 flex items-center justify-center p-6">
         <div className="text-center space-y-2">
-          <div className="w-10 h-10 rounded-lg bg-sky-600 text-white font-extrabold flex items-center justify-center mx-auto">
-            GS
+          <div className="w-12 h-12 rounded-lg bg-white border border-neutral-200 flex items-center justify-center mx-auto p-1 shadow-2xs">
+            <img
+              src="/logo.png"
+              alt="Grattitude Synergy Logo"
+              className="w-full h-full object-contain"
+            />
           </div>
           <div className="text-sm font-bold text-neutral-900">
-            Bootstrapping Grattitude Synergy Enterprise Portal...
+            Grattitude Synergy — Employee Portal
           </div>
           <div className="text-xs text-neutral-500">
             Initializing Persistent Firestore Multi-Tab Cache & 75 Master KPIs

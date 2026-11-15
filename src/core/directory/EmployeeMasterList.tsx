@@ -11,6 +11,7 @@ import {
   Lock,
   ShieldCheck,
   MapPin,
+  Clock,
 } from 'lucide-react';
 import {
   Card,
@@ -25,12 +26,18 @@ import {
 import { FirestoreEngine, AuthEngine } from '../firebase/firebaseConfig';
 import { PermissionsService } from '../services/permissionsService';
 import { AuditService } from '../services/auditService';
+import { SEED_SHOWUP_POLICY } from '../seedData';
 import { AddEmployeeModal } from './AddEmployeeModal';
 import { EmployeeFormBuilder } from './EmployeeFormBuilder';
 import { CompensationLockSettings } from './CompensationLockSettings';
 import { PerformLockSettings } from './PerformLockSettings';
 import { AdminGpsDashboard } from '../../modules/showup/AdminGpsDashboard';
-import type { Employee, ShowupAttendanceRecord } from '../types';
+import { ShiftManagementPanel } from '../../modules/showup/ShiftManagementPanel';
+import type {
+  Employee,
+  ShowupAttendanceRecord,
+  ShowupPolicyConfig,
+} from '../types';
 
 export const EmployeeMasterList: React.FC<{
   currentEmployee: Employee;
@@ -38,6 +45,7 @@ export const EmployeeMasterList: React.FC<{
   const { showToast } = useToast();
   const [activeSubTab, setActiveSubTab] = useState<
     | 'directory'
+    | 'shift-management'
     | 'gps-tracker'
     | 'form-builder'
     | 'compensation-lock'
@@ -47,6 +55,7 @@ export const EmployeeMasterList: React.FC<{
   const [attendanceRecords, setAttendanceRecords] = useState<
     ShowupAttendanceRecord[]
   >([]);
+  const [policy, setPolicy] = useState<ShowupPolicyConfig>(SEED_SHOWUP_POLICY);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -78,8 +87,16 @@ export const EmployeeMasterList: React.FC<{
         setAttendanceRecords
       );
     }
+    const unsubPol = FirestoreEngine.subscribeCollection<ShowupPolicyConfig>(
+      'showup_policy',
+      (items) => {
+        const found = items.find((i) => i.id === 'default_policy');
+        if (found) setPolicy({ ...SEED_SHOWUP_POLICY, ...found });
+      }
+    );
     return () => {
       unsub();
+      unsubPol();
       if (unsubAtt) unsubAtt();
     };
   }, [canAccessGps]);
@@ -181,6 +198,11 @@ export const EmployeeMasterList: React.FC<{
     ...(isAdmin
       ? [
           {
+            id: 'shift-management',
+            label: 'Shift Management',
+            icon: <Clock className="w-3.5 h-3.5" />,
+          },
+          {
             id: 'form-builder',
             label: 'Onboarding Form Builder',
             icon: <Sliders className="w-3.5 h-3.5" />,
@@ -225,6 +247,14 @@ export const EmployeeMasterList: React.FC<{
           </Button>
         )}
       </div>
+
+      {activeSubTab === 'shift-management' && isAdmin && (
+        <ShiftManagementPanel
+          currentAdmin={currentEmployee}
+          employees={employees}
+          policy={policy}
+        />
+      )}
 
       {activeSubTab === 'gps-tracker' && canAccessGps && (
         <AdminGpsDashboard
