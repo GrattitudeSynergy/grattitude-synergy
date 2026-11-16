@@ -16,6 +16,9 @@ export const AttendanceCalendar: React.FC<{
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
+  const formatStatusDisplay = (st: AttendanceStatus): string =>
+    st === 'Absent' ? 'Under-reported' : st;
+
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
 
@@ -75,7 +78,7 @@ export const AttendanceCalendar: React.FC<{
           <span>Monthly Attendance Calendar Grid</span>
         </div>
       }
-      subtitle="Color-coded daily status badges: Present, Late, Half-Day, Absent, WFH, Holiday, Weekly Off."
+      subtitle="Color-coded daily status badges: Present, Late, Half-Day, Under-reported, WFH, Holiday, Weekly Off."
       action={
         <div className="flex items-center gap-2">
           <button
@@ -118,7 +121,7 @@ export const AttendanceCalendar: React.FC<{
             key={st}
             className={`px-2 py-0.5 text-[11px] font-bold border rounded-md ${statusStyles[st]}`}
           >
-            {st}
+            {formatStatusDisplay(st)}
           </span>
         ))}
       </div>
@@ -165,7 +168,9 @@ export const AttendanceCalendar: React.FC<{
                   statusStyles[cell.status]
                 }`}
               >
-                {cell.holidayName ? cell.holidayName : cell.status}
+                {cell.holidayName
+                  ? cell.holidayName
+                  : formatStatusDisplay(cell.status)}
               </div>
             )}
           </div>

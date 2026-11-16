@@ -1289,7 +1289,7 @@ export const ShowUpModule: React.FC<{
             title="HRMS Policy Engine Configuration (showup_policy)"
             subtitle="Configure shift timings, grace cutoff, late-mark rule, and half-day thresholds."
           >
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
               <div>
                 <label className="block text-xs font-bold text-neutral-700 mb-1">
                   Shift Start (HH:mm)
@@ -1313,6 +1313,27 @@ export const ShowUpModule: React.FC<{
                   onChange={(e) =>
                     setPolicy({ ...policy, shiftEnd: e.target.value })
                   }
+                  className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-neutral-700 mb-1">
+                  Mandatory Hours / Day
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={24}
+                  step={0.5}
+                  value={policy.standardHours ?? 8}
+                  onChange={(e) => {
+                    const hrs = Math.max(1, Number(e.target.value));
+                    setPolicy({
+                      ...policy,
+                      standardHours: hrs,
+                      fullDayMinHours: hrs,
+                    });
+                  }}
                   className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
                 />
               </div>

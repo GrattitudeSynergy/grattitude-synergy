@@ -639,12 +639,12 @@ export const SEED_SHOWUP_POLICY: ShowupPolicyConfig = {
   id: 'default_policy',
   shiftStart: '09:30',
   shiftEnd: '18:30',
-  standardHours: 9.0,
+  standardHours: 8.0,
   graceCutoff: '10:05',
   lateMarksPerDeduction: 3,
   lateDeductionDays: 0.5,
-  halfDayMinHours: 4.5,
-  fullDayMinHours: 7.0,
+  halfDayMinHours: 4.0,
+  fullDayMinHours: 8.0,
   elAdvanceNoticeDays: 5,
   clQuotaPerYear: 12,
   slQuotaPerYear: 12,
@@ -1056,6 +1056,25 @@ export async function initializeSeedData(): Promise<void> {
         { skipCloudPush: true }
       );
     }
+  }
+
+  // Ensure default_policy in showup_policy has standardHours = 8.0 (8 mandatory working hours)
+  const existingPolicyDoc = await FirestoreEngine.getDocument<ShowupPolicyConfig>(
+    'showup_policy',
+    'default_policy'
+  );
+  if (existingPolicyDoc && existingPolicyDoc.standardHours === 9) {
+    await FirestoreEngine.setDocument(
+      'showup_policy',
+      'default_policy',
+      {
+        ...existingPolicyDoc,
+        standardHours: 8.0,
+        halfDayMinHours: 4.0,
+        fullDayMinHours: 8.0,
+      },
+      { skipCloudPush: true }
+    );
   }
 
   // Synchronize with Central Cloud Database & Local Server to pull any new employees or password updates

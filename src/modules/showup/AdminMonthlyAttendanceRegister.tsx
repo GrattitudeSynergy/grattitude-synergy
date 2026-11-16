@@ -252,7 +252,7 @@ export const AdminMonthlyAttendanceRegister: React.FC<
               day: d,
               dateStr,
               code: 'A',
-              statusLabel: 'Absent',
+              statusLabel: 'Under-reported (< 4h worked)',
               inTime: inTimeStr,
               outTime: outTimeStr,
               hours: rec.totalHours,
@@ -288,7 +288,7 @@ export const AdminMonthlyAttendanceRegister: React.FC<
             day: d,
             dateStr,
             code: 'A',
-            statusLabel: 'No Punch Recorded (Absent)',
+            statusLabel: 'No Punch Recorded (Under-reported)',
           });
         } else {
           days.push({
@@ -565,7 +565,7 @@ export const AdminMonthlyAttendanceRegister: React.FC<
               WO = Weekly Off
             </span>
             <span className="px-2 py-0.5 font-bold border rounded-md bg-rose-50 text-rose-700 border-rose-200">
-              A = Absent
+              A = Under-reported
             </span>
           </div>
           <div className="text-neutral-500">
@@ -769,7 +769,9 @@ export const AdminMonthlyAttendanceRegister: React.FC<
                                     : 'danger'
                                 }
                               >
-                                {rec.status}
+                                {rec.status === 'Absent'
+                                  ? 'Under-reported'
+                                  : rec.status}
                               </Badge>
                             </td>
                             <td className="px-4 py-2.5 text-xs font-mono text-emerald-700 font-semibold">
@@ -882,7 +884,9 @@ export const AdminMonthlyAttendanceRegister: React.FC<
                                     : 'danger'
                                 }
                               >
-                                {rec.status}
+                                {rec.status === 'Absent'
+                                  ? 'Under-reported'
+                                  : rec.status}
                               </Badge>
                             </td>
                             <td className="px-3 py-2 text-xs font-mono text-emerald-700">

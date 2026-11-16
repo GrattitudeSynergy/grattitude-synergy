@@ -11,6 +11,9 @@ import {
   CheckCheck,
   Calendar,
   ChevronRight,
+  FileText,
+  ExternalLink,
+  Download,
 } from 'lucide-react';
 import { PermissionsService } from '../services/permissionsService';
 import {
@@ -20,7 +23,7 @@ import {
 } from '../services/fiscalService';
 import { NotificationService } from '../services/notificationService';
 import { AuditLogModal } from './AuditLogModal';
-import { Badge } from './DesignSystem';
+import { Badge, Modal, Button } from './DesignSystem';
 import type { Employee, AppRoute, Quarter, AppNotification } from '../types';
 
 interface AppShellProps {
@@ -47,6 +50,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [policyModalOpen, setPolicyModalOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -195,6 +199,30 @@ export const AppShell: React.FC<AppShellProps> = ({
                 </button>
               );
             })}
+
+            {/* Company Policy PDF Button */}
+            <div className="pt-2 mt-2 border-t border-neutral-200">
+              <button
+                type="button"
+                onClick={() => setPolicyModalOpen(true)}
+                className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left border transition-all cursor-pointer bg-white text-neutral-700 border-transparent hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="shrink-0 text-emerald-600">
+                    <FileText className="w-4 h-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold leading-tight truncate">
+                      Company Policy
+                    </div>
+                    <div className="text-[10px] text-neutral-500 truncate mt-0.5">
+                      Attendance &amp; Leave Policy (PDF)
+                    </div>
+                  </div>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 shrink-0 text-neutral-400" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -389,6 +417,54 @@ export const AppShell: React.FC<AppShellProps> = ({
         isOpen={auditModalOpen}
         onClose={() => setAuditModalOpen(false)}
       />
+
+      {/* Company Policy PDF Viewer Modal */}
+      <Modal
+        isOpen={policyModalOpen}
+        onClose={() => setPolicyModalOpen(false)}
+        size="xl"
+        title={
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-emerald-600" />
+            <span>Company Policy — Workplace Attendance and Leave Policy (v3.1)</span>
+          </div>
+        }
+        subtitle="Official Grattitude Synergy LLP HR Policy Document • Effective 16 November 2026"
+        footer={
+          <div className="flex items-center justify-between w-full gap-2">
+            <div className="flex items-center gap-2">
+              <a
+                href="/company-policy.pdf"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open PDF in New Tab</span>
+              </a>
+              <a
+                href="/company-policy.pdf"
+                download="Grattitude_Synergy_Company_Policy_v3.1.pdf"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download PDF</span>
+              </a>
+            </div>
+            <Button variant="outline" onClick={() => setPolicyModalOpen(false)}>
+              Close
+            </Button>
+          </div>
+        }
+      >
+        <div className="w-full h-[75vh] bg-neutral-100 border border-neutral-200 rounded-xl overflow-hidden">
+          <iframe
+            src="/company-policy.pdf"
+            title="Grattitude Synergy Company Policy PDF"
+            className="w-full h-full border-0"
+          />
+        </div>
+      </Modal>
     </div>
   );
 };

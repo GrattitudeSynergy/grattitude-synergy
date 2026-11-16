@@ -464,7 +464,9 @@ export const PunchWidget: React.FC<{
       showToast(
         'info',
         'Checked Out Successfully',
-        `Logged ${computedHours} hrs • Status: ${evaluation.status}`
+        `Logged ${computedHours} hrs • Status: ${
+          evaluation.status === 'Absent' ? 'Under-reported' : evaluation.status
+        }`
       );
     } finally {
       setIsCapturingGps(false);
@@ -627,7 +629,9 @@ export const PunchWidget: React.FC<{
                     : 'danger'
                 }
               >
-                {todayRecord.status}
+                {todayRecord.status === 'Absent'
+                  ? 'Under-reported'
+                  : todayRecord.status}
               </Badge>
             ) : (
               <span className="text-neutral-400 font-mono text-[11px]">

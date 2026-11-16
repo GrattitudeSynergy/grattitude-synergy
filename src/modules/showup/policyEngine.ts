@@ -89,30 +89,28 @@ export const PolicyEngine = {
       const computedCutoff = formatMinutesToHHMM(startMins + graceMins);
       const durationMins =
         endMins >= startMins ? endMins - startMins : 1440 - startMins + endMins;
-      const standardHours = Math.round((durationMins / 60) * 10) / 10;
+      const rawSpanHours = Math.round((durationMins / 60) * 10) / 10;
+      const mandatoryHours =
+        rawSpanHours === 9 ? 8.0 : rawSpanHours > 0 ? rawSpanHours : 8.0;
 
       return {
         shiftStart: customShift.shiftStart,
         shiftEnd: customShift.shiftEnd,
         graceCutoff: computedCutoff,
-        standardHours: standardHours > 0 ? standardHours : 9.0,
+        standardHours: mandatoryHours,
         isCustomShift: true,
         effectiveDate: customShift.effectiveDate,
       };
     }
 
-    const stdStartMins = parseTimeMinutes(defaultStart);
-    const stdEndMins = parseTimeMinutes(defaultEnd);
-    const stdDuration =
-      stdEndMins >= stdStartMins
-        ? stdEndMins - stdStartMins
-        : 1440 - stdStartMins + stdEndMins;
-
     return {
       shiftStart: defaultStart,
       shiftEnd: defaultEnd,
       graceCutoff: rawPolicyCutoff,
-      standardHours: policy?.standardHours || Math.round((stdDuration / 60) * 10) / 10 || 9.0,
+      standardHours:
+        policy?.standardHours && policy.standardHours !== 9
+          ? policy.standardHours
+          : 8.0,
       isCustomShift: false,
     };
   },
@@ -163,8 +161,8 @@ export const PolicyEngine = {
     isLate: boolean,
     policy: ShowupPolicyConfig
   ): { status: AttendanceStatus; isHalfDay: boolean } {
-    const minHalf = policy.halfDayMinHours ?? 4.5;
-    const minFull = policy.fullDayMinHours ?? 7.0;
+    const minHalf = policy.halfDayMinHours ?? 4.0;
+    const minFull = policy.fullDayMinHours ?? 8.0;
 
     if (totalHours < minHalf) {
       return { status: 'Absent', isHalfDay: false };
