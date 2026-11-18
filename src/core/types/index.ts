@@ -172,7 +172,14 @@ export type PerformancePillar =
   | 'Delivery & Quality'
   | 'Technical/Domain Excellence'
   | 'Leadership & Ownership'
-  | 'Client & Process Impact';
+  | 'Client & Process Impact'
+  | (string & {});
+
+export interface PerformPillarsConfig {
+  id: string; // 'performance_pillars'
+  pillars: string[];
+  updatedAt: string;
+}
 
 export type AppraisalLifecycleStatus =
   | 'Draft'
@@ -191,6 +198,7 @@ export interface PerformKpiMaster {
   description: string;
   category: PerformancePillar;
   target?: number; // Optional Default Target
+  showTarget?: boolean; // Controls whether the target is visible (default true)
   unit: string;
   weightage: number; // 15 KPIs per level summing to 100
   scoringFormula: ScoringFormula;
@@ -203,6 +211,7 @@ export interface PerformScorecardItem {
   description: string;
   category: string;
   target?: number; // Optional Default Target
+  showTarget?: boolean; // Controls whether the target is visible (default true)
   unit: string;
   weightage: number;
   scoringFormula: ScoringFormula;

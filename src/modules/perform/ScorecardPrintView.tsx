@@ -2,13 +2,14 @@ import React from 'react';
 import { Printer, Award, CheckCircle2 } from 'lucide-react';
 import { Modal, Button, Badge, Table } from '../../core/components/DesignSystem';
 import { getEffectiveItemScore } from './scoringEngine';
-import type { PerformScorecard } from '../../core/types';
+import type { PerformScorecard, PerformKpiMaster } from '../../core/types';
 
 export const ScorecardPrintView: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   scorecard: PerformScorecard | null;
-}> = ({ isOpen, onClose, scorecard }) => {
+  kpiMasters?: PerformKpiMaster[];
+}> = ({ isOpen, onClose, scorecard, kpiMasters = [] }) => {
   if (!scorecard) return null;
 
   const handlePrint = () => {
@@ -99,6 +100,14 @@ export const ScorecardPrintView: React.FC<{
           ]}
         >
           {scorecard.items.map((item, idx) => {
+            const masterKpi = kpiMasters.find((k) => k.id === item.kpiId);
+            const effTitle = masterKpi?.title || item.title;
+            const effDesc = masterKpi?.description || item.description;
+            const effCategory = masterKpi?.category || item.category;
+            const effShowTarget =
+              item.showTarget !== undefined
+                ? item.showTarget
+                : masterKpi?.showTarget !== false;
             const effScore = getEffectiveItemScore(item, scorecard.status);
             const weightedPts = ((effScore * item.weightage) / 100).toFixed(2);
             return (
@@ -108,10 +117,10 @@ export const ScorecardPrintView: React.FC<{
                 </td>
                 <td className="px-3 py-2.5">
                   <div className="text-xs font-bold text-neutral-900">
-                    {item.title}
+                    {effTitle}
                   </div>
                   <div className="text-[10px] text-neutral-500">
-                    {item.category}
+                    {effCategory} — {effDesc}
                   </div>
                   {item.selfJustification && (
                     <div className="text-[11px] text-neutral-600 mt-1 italic">
@@ -123,9 +132,11 @@ export const ScorecardPrintView: React.FC<{
                   {item.scoringFormula}
                 </td>
                 <td className="px-3 py-2.5 text-xs font-mono">
-                  {item.target !== undefined && item.target !== null
+                  {effShowTarget &&
+                  item.target !== undefined &&
+                  item.target !== null
                     ? `${item.target} ${item.unit}`
-                    : 'Optional'}
+                    : ''}
                 </td>
                 <td className="px-3 py-2.5 text-xs font-mono font-bold">
                   {item.actual} {item.unit}

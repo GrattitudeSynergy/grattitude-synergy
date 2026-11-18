@@ -13,6 +13,8 @@ import {
   Sparkles,
   GraduationCap,
   Lock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   Card,
@@ -39,7 +41,10 @@ import { LifecycleEngine, LIFECYCLE_STAGES } from './lifecycleEngine';
 import { ScorecardPrintView } from './ScorecardPrintView';
 import { PerformOrgHierarchy } from './PerformOrgHierarchy';
 import { InternEnablementTrack } from './InternEnablementTrack';
-import { AdminConfigTab } from './AdminConfigTab';
+import {
+  AdminConfigTab,
+  DEFAULT_PERFORMANCE_PILLARS,
+} from './AdminConfigTab';
 import type {
   Employee,
   Quarter,
@@ -75,6 +80,7 @@ export const PerformModule: React.FC<{
     useState<PerformGradeConfig>(SEED_GRADE_CONFIG);
   const [performLock, setPerformLock] =
     useState<PerformLockConfig>(SEED_PERFORM_LOCK);
+  const [pillars, setPillars] = useState<string[]>(DEFAULT_PERFORMANCE_PILLARS);
   const [comments, setComments] = useState<PerformComment[]>([]);
 
   // Modals & Interactive States
@@ -126,6 +132,10 @@ export const PerformModule: React.FC<{
         if (foundGrade) setGradeConfig(foundGrade);
         const foundLock = items.find((i) => i.id === 'perform_lock');
         if (foundLock) setPerformLock(foundLock);
+        const foundPillars = items.find((i) => i.id === 'performance_pillars');
+        if (foundPillars && Array.isArray(foundPillars.pillars)) {
+          setPillars(foundPillars.pillars);
+        }
       }
     );
     const u5 = FirestoreEngine.subscribeCollection<PerformComment>(
@@ -192,6 +202,7 @@ export const PerformModule: React.FC<{
         description: k.description,
         category: k.category,
         target: k.target,
+        showTarget: k.showTarget !== false,
         unit: k.unit,
         weightage: k.weightage,
         scoringFormula: k.scoringFormula,
@@ -200,7 +211,7 @@ export const PerformModule: React.FC<{
         managerScore: 0,
         ceoScore: 0,
         selfJustification:
-          k.target !== undefined && k.target !== null
+          k.showTarget !== false && k.target !== undefined && k.target !== null
             ? `Achieved benchmark target of ${initialActual} ${k.unit} during ${fiscalYear} ${quarter}.`
             : `Achieved performance score of ${initialActual} during ${fiscalYear} ${quarter}.`,
         managerComments: '',
@@ -788,6 +799,16 @@ export const PerformModule: React.FC<{
                   ]}
                 >
                   {myScorecard.items.map((item, idx) => {
+                    const masterKpi = kpiMasters.find(
+                      (k) => k.id === item.kpiId
+                    );
+                    const effTitle = masterKpi?.title || item.title;
+                    const effDesc = masterKpi?.description || item.description;
+                    const effCategory = masterKpi?.category || item.category;
+                    const effShowTarget =
+                      item.showTarget !== undefined
+                        ? item.showTarget
+                        : masterKpi?.showTarget !== false;
                     const isHighImpact = item.weightage >= 8;
                     const isEditable = myScorecard.status === 'Draft';
 
@@ -804,14 +825,14 @@ export const PerformModule: React.FC<{
                         <td className="px-3 py-3 max-w-xs">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-xs font-bold text-neutral-900">
-                              {item.title}
+                              {effTitle}
                             </span>
                             {isHighImpact && (
                               <Badge variant="warning">High Impact</Badge>
                             )}
                           </div>
                           <div className="text-[11px] text-neutral-500 mt-0.5">
-                            {item.category} — {item.description}
+                            {effCategory} — {effDesc}
                           </div>
                         </td>
                         <td className="px-3 py-3">
@@ -820,9 +841,11 @@ export const PerformModule: React.FC<{
                           </Badge>
                         </td>
                         <td className="px-3 py-3 text-xs font-mono whitespace-nowrap">
-                          {item.target !== undefined && item.target !== null
+                          {effShowTarget &&
+                          item.target !== undefined &&
+                          item.target !== null
                             ? `${item.target} ${item.unit}`
-                            : `Optional (${item.unit})`}
+                            : ''}
                         </td>
                         <td className="px-3 py-3 w-32">
                           {item.scoringFormula === 'BOOLEAN_BINARY' ? (
@@ -1205,6 +1228,8 @@ export const PerformModule: React.FC<{
           allEmployees={employees}
           kpiMasters={kpiMasters}
           gradeConfig={gradeConfig}
+          scorecards={scorecards}
+          pillars={pillars}
         />
       )}
 
@@ -1213,6 +1238,7 @@ export const PerformModule: React.FC<{
         isOpen={Boolean(printScorecard)}
         onClose={() => setPrintScorecard(null)}
         scorecard={printScorecard}
+        kpiMasters={kpiMasters}
       />
 
       {/* MODAL: Target Setting */}
@@ -1225,42 +1251,100 @@ export const PerformModule: React.FC<{
             ? `KPI Target Setting — ${targetModalSc.employeeName} (${targetModalSc.employeeEcode})`
             : 'Target Setting'
         }
-        subtitle="Customize quarterly KPI numerical targets for this employee."
+        subtitle="Customize quarterly KPI numerical targets and toggle target visibility for this employee."
       >
         {targetModalSc && (
           <div className="space-y-4">
-            <Table headers={['KPI Title', 'Formula', 'Weight', 'Target Value', 'Unit']}>
-              {targetModalSc.items.map((item) => (
-                <tr key={item.kpiId}>
-                  <td className="px-3 py-2 text-xs font-bold">{item.title}</td>
-                  <td className="px-3 py-2 text-[11px] font-mono">
-                    {item.scoringFormula}
-                  </td>
-                  <td className="px-3 py-2 text-xs font-mono">
-                    {item.weightage}%
-                  </td>
-                  <td className="px-3 py-2">
-                    <input
-                      type="number"
-                      step="any"
-                      placeholder="Optional"
-                      value={item.target ?? ''}
-                      onChange={(e) =>
-                        handleUpdateScorecardItem(targetModalSc, item.kpiId, {
-                          target:
-                            e.target.value.trim() === ''
-                              ? undefined
-                              : Number(e.target.value),
-                        })
-                      }
-                      className="w-24 px-2 py-1 text-xs font-mono border border-neutral-300 rounded-lg"
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-xs text-neutral-500">
-                    {item.unit}
-                  </td>
-                </tr>
-              ))}
+            <Table
+              headers={[
+                'KPI Title & Description',
+                'Formula',
+                'Weight',
+                'Target Visibility',
+                'Target Value',
+                'Unit',
+              ]}
+            >
+              {targetModalSc.items.map((item) => {
+                const masterKpi = kpiMasters.find((k) => k.id === item.kpiId);
+                const effTitle = masterKpi?.title || item.title;
+                const effDesc = masterKpi?.description || item.description;
+                const isTargetVisible =
+                  item.showTarget !== undefined
+                    ? item.showTarget
+                    : masterKpi?.showTarget !== false;
+
+                return (
+                  <tr key={item.kpiId}>
+                    <td className="px-3 py-2 max-w-xs">
+                      <div className="text-xs font-bold text-neutral-900">
+                        {effTitle}
+                      </div>
+                      <div className="text-[10px] text-neutral-500 mt-0.5">
+                        {effDesc}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-[11px] font-mono">
+                      {item.scoringFormula}
+                    </td>
+                    <td className="px-3 py-2 text-xs font-mono">
+                      {item.weightage}%
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleUpdateScorecardItem(targetModalSc, item.kpiId, {
+                            showTarget: !isTargetVisible,
+                          })
+                        }
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
+                          isTargetVisible
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                            : 'bg-neutral-100 text-neutral-500 border-neutral-300 hover:bg-neutral-200'
+                        }`}
+                      >
+                        {isTargetVisible ? (
+                          <>
+                            <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Visible</span>
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5 text-neutral-400" />
+                            <span>Hidden</span>
+                          </>
+                        )}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2">
+                      {isTargetVisible ? (
+                        <input
+                          type="number"
+                          step="any"
+                          value={item.target ?? ''}
+                          onChange={(e) =>
+                            handleUpdateScorecardItem(
+                              targetModalSc,
+                              item.kpiId,
+                              {
+                                target:
+                                  e.target.value.trim() === ''
+                                    ? undefined
+                                    : Number(e.target.value),
+                              }
+                            )
+                          }
+                          className="w-24 px-2 py-1 text-xs font-mono border border-neutral-300 rounded-lg"
+                        />
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">
+                      {isTargetVisible ? item.unit : ''}
+                    </td>
+                  </tr>
+                );
+              })}
             </Table>
             <div className="flex justify-end">
               <Button variant="primary" onClick={() => setTargetModalSc(null)}>
@@ -1295,19 +1379,35 @@ export const PerformModule: React.FC<{
                 ...(isCEO || isAdmin ? ['CEO Score (0–100)'] : []),
               ]}
             >
-              {reviewingScorecard.items.map((item) => (
-                <tr key={item.kpiId}>
-                  <td className="px-3 py-2.5 max-w-xs">
-                    <div className="text-xs font-bold text-neutral-900">
-                      {item.title}
-                    </div>
-                    <div className="text-[11px] text-neutral-600 italic mt-0.5">
-                      "{item.selfJustification || 'No justification provided'}"
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs font-mono">
-                    {item.actual} / {item.target} {item.unit}
-                  </td>
+              {reviewingScorecard.items.map((item) => {
+                const masterKpi = kpiMasters.find((k) => k.id === item.kpiId);
+                const effTitle = masterKpi?.title || item.title;
+                const effDesc = masterKpi?.description || item.description;
+                const effShowTarget =
+                  item.showTarget !== undefined
+                    ? item.showTarget
+                    : masterKpi?.showTarget !== false;
+
+                return (
+                  <tr key={item.kpiId}>
+                    <td className="px-3 py-2.5 max-w-xs">
+                      <div className="text-xs font-bold text-neutral-900">
+                        {effTitle}
+                      </div>
+                      <div className="text-[10px] text-neutral-500 mt-0.5">
+                        {effDesc}
+                      </div>
+                      <div className="text-[11px] text-neutral-600 italic mt-0.5">
+                        "{item.selfJustification || 'No justification provided'}"
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs font-mono">
+                      {effShowTarget &&
+                      item.target !== undefined &&
+                      item.target !== null
+                        ? `${item.actual} / ${item.target} ${item.unit}`
+                        : `${item.actual} ${item.unit}`}
+                    </td>
                   <td className="px-3 py-2.5 text-xs font-mono">
                     {item.weightage}%
                   </td>
@@ -1359,7 +1459,8 @@ export const PerformModule: React.FC<{
                     </td>
                   )}
                 </tr>
-              ))}
+                  );
+                })}
             </Table>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
