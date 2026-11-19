@@ -101,9 +101,9 @@ export const ScorecardPrintView: React.FC<{
         >
           {scorecard.items.map((item, idx) => {
             const masterKpi = kpiMasters.find((k) => k.id === item.kpiId);
-            const effTitle = masterKpi?.title || item.title;
-            const effDesc = masterKpi?.description || item.description;
-            const effCategory = masterKpi?.category || item.category;
+            const effTitle = item.title || masterKpi?.title;
+            const effDesc = item.description || masterKpi?.description;
+            const effCategory = item.category || masterKpi?.category;
             const effShowTarget =
               item.showTarget !== undefined
                 ? item.showTarget

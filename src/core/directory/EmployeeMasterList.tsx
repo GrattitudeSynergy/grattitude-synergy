@@ -33,6 +33,8 @@ import { CompensationLockSettings } from './CompensationLockSettings';
 import { PerformLockSettings } from './PerformLockSettings';
 import { AdminGpsDashboard } from '../../modules/showup/AdminGpsDashboard';
 import { ShiftManagementPanel } from '../../modules/showup/ShiftManagementPanel';
+import { KpiAssignmentPanel } from '../../modules/perform/KpiAssignmentPanel';
+import { FiscalService } from '../services/fiscalService';
 import type {
   Employee,
   ShowupAttendanceRecord,
@@ -46,6 +48,7 @@ export const EmployeeMasterList: React.FC<{
   const [activeSubTab, setActiveSubTab] = useState<
     | 'directory'
     | 'shift-management'
+    | 'kpi-assignment'
     | 'gps-tracker'
     | 'form-builder'
     | 'compensation-lock'
@@ -203,6 +206,11 @@ export const EmployeeMasterList: React.FC<{
             icon: <Clock className="w-3.5 h-3.5" />,
           },
           {
+            id: 'kpi-assignment',
+            label: 'KPI Assignment',
+            icon: <Sliders className="w-3.5 h-3.5" />,
+          },
+          {
             id: 'form-builder',
             label: 'Onboarding Form Builder',
             icon: <Sliders className="w-3.5 h-3.5" />,
@@ -253,6 +261,14 @@ export const EmployeeMasterList: React.FC<{
           currentAdmin={currentEmployee}
           employees={employees}
           policy={policy}
+        />
+      )}
+
+      {activeSubTab === 'kpi-assignment' && isAdmin && (
+        <KpiAssignmentPanel
+          currentAdmin={currentEmployee}
+          defaultFiscalYear={FiscalService.getInitialLocal().fiscalYear}
+          defaultQuarter={FiscalService.getInitialLocal().quarter}
         />
       )}
 

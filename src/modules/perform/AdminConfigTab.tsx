@@ -120,6 +120,15 @@ export const AdminConfigTab: React.FC<{
     for (const sc of affectedScorecards) {
       const nextItems = sc.items.map((item) => {
         if (item.kpiId !== updatedMaster.id) return item;
+        // Preserve per-employee/per-quarter overrides made in Admin KPI Assignment
+        if (item.isCustomized) {
+          return {
+            ...item,
+            category: updatedMaster.category,
+            unit: updatedMaster.unit,
+            scoringFormula: updatedMaster.scoringFormula,
+          };
+        }
         return {
           ...item,
           title: updatedMaster.title,

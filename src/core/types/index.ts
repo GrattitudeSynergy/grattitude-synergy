@@ -212,6 +212,7 @@ export interface PerformScorecardItem {
   category: string;
   target?: number; // Optional Default Target
   showTarget?: boolean; // Controls whether the target is visible (default true)
+  isCustomized?: boolean; // Admin KPI Assignment override: title/description/target set per employee+quarter
   unit: string;
   weightage: number;
   scoringFormula: ScoringFormula;
@@ -239,6 +240,9 @@ export interface PerformScorecard {
   grade: LetterGrade;
   manager1on1Notes?: string;
   ceoCalibrationNotes?: string;
+  kpiAssignedBy?: string; // Admin who last edited this quarter's KPI sheet
+  kpiAssignedAt?: string;
+  isAdminDraft?: boolean; // True when saved by Admin as an unassigned draft
   updatedAt?: string;
 }
 

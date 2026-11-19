@@ -41,6 +41,7 @@ import { LifecycleEngine, LIFECYCLE_STAGES } from './lifecycleEngine';
 import { ScorecardPrintView } from './ScorecardPrintView';
 import { PerformOrgHierarchy } from './PerformOrgHierarchy';
 import { InternEnablementTrack } from './InternEnablementTrack';
+import { KpiAssignmentPanel } from './KpiAssignmentPanel';
 import {
   AdminConfigTab,
   DEFAULT_PERFORMANCE_PILLARS,
@@ -151,9 +152,9 @@ export const PerformModule: React.FC<{
     };
   }, []);
 
-  // Filter scorecards for current fiscal cycle
+  // Filter assigned scorecards for current fiscal cycle (exclude unassigned Admin drafts)
   const cycleScorecards = scorecards.filter(
-    (sc) => sc.fiscalYear === fiscalYear && sc.quarter === quarter
+    (sc) => !sc.isAdminDraft && sc.fiscalYear === fiscalYear && sc.quarter === quarter
   );
 
   const myScorecardId = `${currentEmployee.id}_${fiscalYear}_${quarter}`;
@@ -585,6 +586,11 @@ export const PerformModule: React.FC<{
     ...(isAdmin
       ? [
           {
+            id: 'kpi-assignment',
+            label: 'KPI Assignment',
+            icon: <Sliders className="w-3.5 h-3.5" />,
+          },
+          {
             id: 'admin-config',
             label: 'Admin KPI Catalog & Cutoffs',
             icon: <Sliders className="w-3.5 h-3.5" />,
@@ -802,9 +808,9 @@ export const PerformModule: React.FC<{
                     const masterKpi = kpiMasters.find(
                       (k) => k.id === item.kpiId
                     );
-                    const effTitle = masterKpi?.title || item.title;
-                    const effDesc = masterKpi?.description || item.description;
-                    const effCategory = masterKpi?.category || item.category;
+                    const effTitle = item.title || masterKpi?.title;
+                    const effDesc = item.description || masterKpi?.description;
+                    const effCategory = item.category || masterKpi?.category;
                     const effShowTarget =
                       item.showTarget !== undefined
                         ? item.showTarget
@@ -1222,6 +1228,14 @@ export const PerformModule: React.FC<{
       )}
 
       {/* TAB 6: ADMIN CONFIG TAB */}
+      {activeTab === 'kpi-assignment' && isAdmin && (
+        <KpiAssignmentPanel
+          currentAdmin={currentEmployee}
+          defaultFiscalYear={fiscalYear}
+          defaultQuarter={quarter}
+        />
+      )}
+
       {activeTab === 'admin-config' && isAdmin && (
         <AdminConfigTab
           currentAdmin={currentEmployee}
@@ -1267,8 +1281,8 @@ export const PerformModule: React.FC<{
             >
               {targetModalSc.items.map((item) => {
                 const masterKpi = kpiMasters.find((k) => k.id === item.kpiId);
-                const effTitle = masterKpi?.title || item.title;
-                const effDesc = masterKpi?.description || item.description;
+                const effTitle = item.title || masterKpi?.title;
+                const effDesc = item.description || masterKpi?.description;
                 const isTargetVisible =
                   item.showTarget !== undefined
                     ? item.showTarget
@@ -1381,8 +1395,8 @@ export const PerformModule: React.FC<{
             >
               {reviewingScorecard.items.map((item) => {
                 const masterKpi = kpiMasters.find((k) => k.id === item.kpiId);
-                const effTitle = masterKpi?.title || item.title;
-                const effDesc = masterKpi?.description || item.description;
+                const effTitle = item.title || masterKpi?.title;
+                const effDesc = item.description || masterKpi?.description;
                 const effShowTarget =
                   item.showTarget !== undefined
                     ? item.showTarget
