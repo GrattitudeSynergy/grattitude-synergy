@@ -1,7 +1,11 @@
 import React from 'react';
 import { Printer, Award, CheckCircle2 } from 'lucide-react';
 import { Modal, Button, Badge, Table } from '../../core/components/DesignSystem';
-import { getEffectiveItemScore } from './scoringEngine';
+import {
+  getEffectiveItemScore,
+  resolveTargetValueType,
+  formatTargetDisplay,
+} from './scoringEngine';
 import type { PerformScorecard, PerformKpiMaster } from '../../core/types';
 
 export const ScorecardPrintView: React.FC<{
@@ -89,7 +93,6 @@ export const ScorecardPrintView: React.FC<{
           headers={[
             '#',
             'KPI & Performance Pillar',
-            'Algorithm',
             'Target',
             'Actual',
             'Weight',
@@ -108,6 +111,9 @@ export const ScorecardPrintView: React.FC<{
               item.showTarget !== undefined
                 ? item.showTarget
                 : masterKpi?.showTarget !== false;
+            const effTargetType = resolveTargetValueType(
+              item.targetType ? item : masterKpi || item
+            );
             const effScore = getEffectiveItemScore(item, scorecard.status);
             const weightedPts = ((effScore * item.weightage) / 100).toFixed(2);
             return (
@@ -128,15 +134,13 @@ export const ScorecardPrintView: React.FC<{
                     </div>
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-[10px] font-mono text-neutral-600">
-                  {item.scoringFormula}
-                </td>
                 <td className="px-3 py-2.5 text-xs font-mono">
-                  {effShowTarget &&
-                  item.target !== undefined &&
-                  item.target !== null
-                    ? `${item.target} ${item.unit}`
-                    : ''}
+                  {formatTargetDisplay(
+                    item.target,
+                    effTargetType,
+                    item.unit,
+                    effShowTarget
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-xs font-mono font-bold">
                   {item.actual} {item.unit}

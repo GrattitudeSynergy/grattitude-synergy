@@ -22,13 +22,18 @@ import {
 import { FirestoreEngine } from '../../core/firebase/firebaseConfig';
 import { AuditService } from '../../core/services/auditService';
 import { PerformLockSettings } from '../../core/directory/PerformLockSettings';
+import {
+  TARGET_VALUE_TYPES,
+  resolveTargetValueType,
+  formatTargetDisplay,
+} from './scoringEngine';
 import type {
   Employee,
   PerformKpiMaster,
   PerformGradeConfig,
   PerformScorecard,
   PerformPillarsConfig,
-  ScoringFormula,
+  TargetValueType,
   PerformancePillar,
 } from '../../core/types';
 
@@ -91,11 +96,11 @@ export const AdminConfigTab: React.FC<{
     'Delivery & Quality'
   );
   const [newTargetInput, setNewTargetInput] = useState<string>('');
+  const [newTargetType, setNewTargetType] =
+    useState<TargetValueType>('Percentage');
   const [newShowTarget, setNewShowTarget] = useState<boolean>(true);
   const [newUnit, setNewUnit] = useState('%');
   const [newWeightage, setNewWeightage] = useState<number>(5);
-  const [newFormula, setNewFormula] =
-    useState<ScoringFormula>('DIRECT_PROPORTION');
 
   // Grade Cutoff State
   const [aPlus, setAPlus] = useState<number>(gradeConfig.cutoffs.APlus);
@@ -126,7 +131,6 @@ export const AdminConfigTab: React.FC<{
             ...item,
             category: updatedMaster.category,
             unit: updatedMaster.unit,
-            scoringFormula: updatedMaster.scoringFormula,
           };
         }
         return {
@@ -135,10 +139,10 @@ export const AdminConfigTab: React.FC<{
           description: updatedMaster.description,
           category: updatedMaster.category,
           target: updatedMaster.target,
+          targetType: updatedMaster.targetType,
           showTarget: updatedMaster.showTarget ?? true,
           unit: updatedMaster.unit,
           weightage: updatedMaster.weightage,
-          scoringFormula: updatedMaster.scoringFormula,
         };
       });
       await FirestoreEngine.setDocument('perform_scorecards', sc.id, {
@@ -357,10 +361,19 @@ export const AdminConfigTab: React.FC<{
   const handleSaveKpiEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingKpi) return;
+    const resolvedType = resolveTargetValueType(editingKpi);
+    const cleanedUnit =
+      resolvedType === 'Percentage'
+        ? '%'
+        : resolvedType === 'Text'
+        ? ''
+        : editingKpi.unit;
     const updatedKpi: PerformKpiMaster = {
       ...editingKpi,
       title: editingKpi.title.trim(),
       description: editingKpi.description.trim(),
+      targetType: resolvedType,
+      unit: cleanedUnit,
       showTarget: editingKpi.showTarget !== false,
     };
 
@@ -376,7 +389,7 @@ export const AdminConfigTab: React.FC<{
       actor: currentAdmin,
       targetId: updatedKpi.id,
       targetType: 'PerformKpiMaster',
-      details: `Updated KPI ${updatedKpi.code} (${updatedKpi.title}): Pillar=${updatedKpi.category}, Description="${updatedKpi.description}", Target=${updatedKpi.target !== undefined ? `${updatedKpi.target} ${updatedKpi.unit}` : 'None'}, ShowTarget=${updatedKpi.showTarget}, Weight=${updatedKpi.weightage}%, Formula=${updatedKpi.scoringFormula}.`,
+      details: `Updated KPI ${updatedKpi.code} (${updatedKpi.title}): Pillar=${updatedKpi.category}, Description="${updatedKpi.description}", DataType=${resolvedType}, Target=${formatTargetDisplay(updatedKpi.target, resolvedType, cleanedUnit, updatedKpi.showTarget) || 'None'}, ShowTarget=${updatedKpi.showTarget}, Weight=${updatedKpi.weightage}%.`,
     });
     showToast(
       'success',
@@ -392,8 +405,13 @@ export const AdminConfigTab: React.FC<{
     const code =
       newCode.trim() ||
       `KPI-L${selectedLevel}-${String(levelKpis.length + 1).padStart(2, '0')}`;
-    const parsedTarget =
-      newTargetInput.trim() === '' ? undefined : Number(newTargetInput);
+    const trimmedTarget = newTargetInput.trim();
+    const parsedTarget: number | string | undefined =
+      trimmedTarget === ''
+        ? undefined
+        : newTargetType === 'Text'
+        ? trimmedTarget
+        : Number(trimmedTarget);
 
     const newKpi: PerformKpiMaster = {
       id: code,
@@ -404,10 +422,15 @@ export const AdminConfigTab: React.FC<{
         newDescription.trim() || 'Configured KPI performance metric.',
       category: newCategory,
       target: parsedTarget,
+      targetType: newTargetType,
       showTarget: newShowTarget,
-      unit: newUnit.trim() || '%',
+      unit:
+        newTargetType === 'Percentage'
+          ? '%'
+          : newTargetType === 'Text'
+          ? ''
+          : newUnit.trim(),
       weightage: Number(newWeightage) || 5,
-      scoringFormula: newFormula,
     };
 
     await FirestoreEngine.setDocument('perform_kpi_masters', newKpi.id, newKpi);
@@ -416,7 +439,7 @@ export const AdminConfigTab: React.FC<{
       actor: currentAdmin,
       targetId: newKpi.id,
       targetType: 'PerformKpiMaster',
-      details: `Created Master KPI ${newKpi.code} (${newKpi.title}) for Level ${selectedLevel}. Pillar: ${newKpi.category}, Target Visible: ${newShowTarget}.`,
+      details: `Created Master KPI ${newKpi.code} (${newKpi.title}) for Level ${selectedLevel}. Pillar: ${newKpi.category}, Data Type: ${newTargetType}, Target Visible: ${newShowTarget}.`,
     });
 
     showToast(
@@ -428,6 +451,8 @@ export const AdminConfigTab: React.FC<{
     setNewTitle('');
     setNewDescription('');
     setNewTargetInput('');
+    setNewTargetType('Percentage');
+    setNewUnit('%');
     setNewShowTarget(true);
     setCreateModalOpen(false);
   };
@@ -690,7 +715,7 @@ export const AdminConfigTab: React.FC<{
             'Code',
             'KPI Title & Description',
             'Performance Pillar',
-            'Scoring Algorithm',
+            'Target Data Type',
             'Default Target',
             'Target Visibility',
             'Weightage',
@@ -699,6 +724,7 @@ export const AdminConfigTab: React.FC<{
         >
           {levelKpis.map((kpi) => {
             const isTargetVisible = kpi.showTarget !== false;
+            const resolvedType = resolveTargetValueType(kpi);
             return (
               <tr key={kpi.id} className="hover:bg-neutral-50">
                 <td className="px-4 py-3 text-xs font-mono font-bold text-neutral-800 whitespace-nowrap">
@@ -721,16 +747,17 @@ export const AdminConfigTab: React.FC<{
                   <Badge variant="info">{kpi.category}</Badge>
                 </td>
                 <td className="px-4 py-3">
-                  <Badge variant="neutral" className="font-mono">
-                    {kpi.scoringFormula}
-                  </Badge>
+                  {isTargetVisible ? (
+                    <Badge variant="neutral">{resolvedType}</Badge>
+                  ) : null}
                 </td>
                 <td className="px-4 py-3 text-xs font-mono font-bold">
-                  {isTargetVisible &&
-                  kpi.target !== undefined &&
-                  kpi.target !== null
-                    ? `${kpi.target} ${kpi.unit}`
-                    : ''}
+                  {formatTargetDisplay(
+                    kpi.target,
+                    resolvedType,
+                    kpi.unit,
+                    isTargetVisible
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <button
@@ -771,6 +798,7 @@ export const AdminConfigTab: React.FC<{
                     onClick={() =>
                       setEditingKpi({
                         ...kpi,
+                        targetType: resolvedType,
                         showTarget: kpi.showTarget !== false,
                       })
                     }
@@ -891,90 +919,156 @@ export const AdminConfigTab: React.FC<{
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              {editingKpi.showTarget !== false && (
-                <div>
-                  <label className="block text-xs font-bold text-neutral-700 mb-1">
-                    Default Target (Optional)
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder="Optional"
-                    value={editingKpi.target ?? ''}
-                    onChange={(e) =>
-                      setEditingKpi({
-                        ...editingKpi,
-                        target:
-                          e.target.value.trim() === ''
-                            ? undefined
-                            : Number(e.target.value),
-                      })
-                    }
-                    className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
-                  />
-                </div>
-              )}
+            {(() => {
+              const editType = resolveTargetValueType(editingKpi);
+              return (
+                <>
+                  {editingKpi.showTarget !== false && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-neutral-700 mb-1">
+                          Target Value Data Type *
+                        </label>
+                        <select
+                          value={editType}
+                          onChange={(e) => {
+                            const nextType = e.target.value as TargetValueType;
+                            let nextTarget = editingKpi.target;
+                            if (
+                              nextType !== 'Text' &&
+                              typeof nextTarget === 'string' &&
+                              nextTarget.trim() !== '' &&
+                              Number.isNaN(Number(nextTarget))
+                            ) {
+                              nextTarget = undefined;
+                            } else if (
+                              nextType !== 'Text' &&
+                              typeof nextTarget === 'string' &&
+                              nextTarget.trim() !== ''
+                            ) {
+                              nextTarget = Number(nextTarget);
+                            }
+                            setEditingKpi({
+                              ...editingKpi,
+                              targetType: nextType,
+                              target: nextTarget,
+                              unit:
+                                nextType === 'Percentage'
+                                  ? '%'
+                                  : nextType === 'Text'
+                                  ? ''
+                                  : editingKpi.unit === '%'
+                                  ? ''
+                                  : editingKpi.unit,
+                            });
+                          }}
+                          className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
+                        >
+                          {TARGET_VALUE_TYPES.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
-              <div>
-                <label className="block text-xs font-bold text-neutral-700 mb-1">
-                  Unit
-                </label>
-                <input
-                  type="text"
-                  value={editingKpi.unit}
-                  onChange={(e) =>
-                    setEditingKpi({
-                      ...editingKpi,
-                      unit: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
-                />
-              </div>
+                      <div>
+                        <label className="block text-xs font-bold text-neutral-700 mb-1">
+                          Default Target (Optional)
+                        </label>
+                        {editType === 'Text' ? (
+                          <input
+                            type="text"
+                            placeholder="Enter target text..."
+                            value={editingKpi.target ?? ''}
+                            onChange={(e) =>
+                              setEditingKpi({
+                                ...editingKpi,
+                                target:
+                                  e.target.value.trim() === ''
+                                    ? undefined
+                                    : e.target.value,
+                              })
+                            }
+                            className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              step="any"
+                              min={editType === 'Percentage' ? 0 : undefined}
+                              max={editType === 'Percentage' ? 100 : undefined}
+                              placeholder={
+                                editType === 'Percentage' ? '0–100' : 'Optional'
+                              }
+                              value={editingKpi.target ?? ''}
+                              onChange={(e) =>
+                                setEditingKpi({
+                                  ...editingKpi,
+                                  target:
+                                    e.target.value.trim() === ''
+                                      ? undefined
+                                      : Number(e.target.value),
+                                })
+                              }
+                              className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+                            />
+                            {editType === 'Percentage' && (
+                              <span className="text-xs font-mono font-bold text-neutral-500">
+                                %
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
-              <div>
-                <label className="block text-xs font-bold text-neutral-700 mb-1">
-                  Weightage (%)
-                </label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={100}
-                  value={editingKpi.weightage}
-                  onChange={(e) =>
-                    setEditingKpi({
-                      ...editingKpi,
-                      weightage: Number(e.target.value),
-                    })
-                  }
-                  className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
-                />
-              </div>
-            </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {editType === 'Number' && editingKpi.showTarget !== false && (
+                      <div>
+                        <label className="block text-xs font-bold text-neutral-700 mb-1">
+                          Unit (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={editingKpi.unit}
+                          onChange={(e) =>
+                            setEditingKpi({
+                              ...editingKpi,
+                              unit: e.target.value,
+                            })
+                          }
+                          placeholder="e.g. hrs, count, deals"
+                          className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+                        />
+                      </div>
+                    )}
 
-            <div>
-              <label className="block text-xs font-bold text-neutral-700 mb-1">
-                Deterministic Scoring Formula
-              </label>
-              <select
-                value={editingKpi.scoringFormula}
-                onChange={(e) =>
-                  setEditingKpi({
-                    ...editingKpi,
-                    scoringFormula: e.target.value as ScoringFormula,
-                  })
-                }
-                className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg bg-white"
-              >
-                <option value="DIRECT_PROPORTION">DIRECT_PROPORTION</option>
-                <option value="INVERSE_PROPORTION">INVERSE_PROPORTION</option>
-                <option value="STEP_MILESTONE">STEP_MILESTONE</option>
-                <option value="SLAB_SCALE">SLAB_SCALE</option>
-                <option value="BOOLEAN_BINARY">BOOLEAN_BINARY</option>
-              </select>
-            </div>
+                    <div>
+                      <label className="block text-xs font-bold text-neutral-700 mb-1">
+                        Weightage (%)
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min={0}
+                        max={100}
+                        value={editingKpi.weightage}
+                        onChange={(e) =>
+                          setEditingKpi({
+                            ...editingKpi,
+                            weightage: Number(e.target.value),
+                          })
+                        }
+                        className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="flex justify-end gap-2">
               <Button
@@ -1091,35 +1185,90 @@ export const AdminConfigTab: React.FC<{
             </button>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            {newShowTarget && (
+          {newShowTarget && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-neutral-700 mb-1">
+                  Target Value Data Type *
+                </label>
+                <select
+                  value={newTargetType}
+                  onChange={(e) => {
+                    const nextType = e.target.value as TargetValueType;
+                    setNewTargetType(nextType);
+                    if (
+                      nextType !== 'Text' &&
+                      newTargetInput.trim() !== '' &&
+                      Number.isNaN(Number(newTargetInput))
+                    ) {
+                      setNewTargetInput('');
+                    }
+                    if (nextType === 'Percentage') setNewUnit('%');
+                    else if (nextType === 'Text') setNewUnit('');
+                    else if (newUnit === '%') setNewUnit('');
+                  }}
+                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
+                >
+                  {TARGET_VALUE_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-neutral-700 mb-1">
                   Default Target (Optional)
                 </label>
+                {newTargetType === 'Text' ? (
+                  <input
+                    type="text"
+                    value={newTargetInput}
+                    onChange={(e) => setNewTargetInput(e.target.value)}
+                    placeholder="Enter target text..."
+                    className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg"
+                  />
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      step="any"
+                      min={newTargetType === 'Percentage' ? 0 : undefined}
+                      max={newTargetType === 'Percentage' ? 100 : undefined}
+                      value={newTargetInput}
+                      onChange={(e) => setNewTargetInput(e.target.value)}
+                      placeholder={
+                        newTargetType === 'Percentage' ? '0–100' : 'Optional'
+                      }
+                      className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+                    />
+                    {newTargetType === 'Percentage' && (
+                      <span className="text-xs font-mono font-bold text-neutral-500">
+                        %
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            {newTargetType === 'Number' && newShowTarget && (
+              <div>
+                <label className="block text-xs font-bold text-neutral-700 mb-1">
+                  Unit (Optional)
+                </label>
                 <input
-                  type="number"
-                  step="any"
-                  value={newTargetInput}
-                  onChange={(e) => setNewTargetInput(e.target.value)}
-                  placeholder="Optional"
+                  type="text"
+                  value={newUnit}
+                  onChange={(e) => setNewUnit(e.target.value)}
+                  placeholder="hrs, count, deals"
                   className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
                 />
               </div>
             )}
-
-            <div>
-              <label className="block text-xs font-bold text-neutral-700 mb-1">
-                Unit
-              </label>
-              <input
-                type="text"
-                value={newUnit}
-                onChange={(e) => setNewUnit(e.target.value)}
-                placeholder="%, hrs, count"
-                className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
-              />
-            </div>
 
             <div>
               <label className="block text-xs font-bold text-neutral-700 mb-1">
@@ -1128,30 +1277,13 @@ export const AdminConfigTab: React.FC<{
               <input
                 type="number"
                 required
-                min={1}
+                min={0}
                 max={100}
                 value={newWeightage}
                 onChange={(e) => setNewWeightage(Number(e.target.value))}
                 className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
               />
             </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-neutral-700 mb-1">
-              Scoring Algorithm
-            </label>
-            <select
-              value={newFormula}
-              onChange={(e) => setNewFormula(e.target.value as ScoringFormula)}
-              className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg bg-white"
-            >
-              <option value="DIRECT_PROPORTION">DIRECT_PROPORTION</option>
-              <option value="INVERSE_PROPORTION">INVERSE_PROPORTION</option>
-              <option value="STEP_MILESTONE">STEP_MILESTONE</option>
-              <option value="SLAB_SCALE">SLAB_SCALE</option>
-              <option value="BOOLEAN_BINARY">BOOLEAN_BINARY</option>
-            </select>
           </div>
 
           <div className="flex justify-end gap-2">

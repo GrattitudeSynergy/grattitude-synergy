@@ -32,10 +32,12 @@ import { AuditService } from '../../core/services/auditService';
 import { NotificationService } from '../../core/services/notificationService';
 import { SEED_GRADE_CONFIG, SEED_PERFORM_LOCK } from '../../core/seedData';
 import {
+  TARGET_VALUE_TYPES,
+  resolveTargetValueType,
+  formatTargetDisplay,
   calculateKpiScore,
   calculateTotalWeightedScore,
   resolveLetterGrade,
-  getEffectiveItemScore,
 } from './scoringEngine';
 import { LifecycleEngine, LIFECYCLE_STAGES } from './lifecycleEngine';
 import { ScorecardPrintView } from './ScorecardPrintView';
@@ -49,6 +51,7 @@ import {
 import type {
   Employee,
   Quarter,
+  TargetValueType,
   PerformKpiMaster,
   PerformScorecard,
   PerformScorecardItem,
@@ -186,16 +189,24 @@ export const PerformModule: React.FC<{
     }
 
     const items: PerformScorecardItem[] = levelKpis.map((k) => {
+      const targetType = resolveTargetValueType(k);
       const initialActual =
-        k.scoringFormula === 'BOOLEAN_BINARY'
-          ? 1
-          : k.target !== undefined && k.target !== null
-          ? k.target
+        targetType !== 'Text' &&
+        k.target !== undefined &&
+        k.target !== null &&
+        Number.isFinite(Number(k.target))
+          ? Number(k.target)
           : 100;
       const initialScore = calculateKpiScore(
-        k.scoringFormula,
         initialActual,
-        k.target
+        k.target,
+        targetType
+      );
+      const formattedTarget = formatTargetDisplay(
+        k.target,
+        targetType,
+        k.unit,
+        k.showTarget !== false
       );
       return {
         kpiId: k.id,
@@ -203,18 +214,17 @@ export const PerformModule: React.FC<{
         description: k.description,
         category: k.category,
         target: k.target,
+        targetType,
         showTarget: k.showTarget !== false,
-        unit: k.unit,
+        unit: targetType === 'Percentage' ? '%' : targetType === 'Text' ? '' : k.unit,
         weightage: k.weightage,
-        scoringFormula: k.scoringFormula,
         actual: initialActual,
         selfScore: initialScore,
         managerScore: 0,
         ceoScore: 0,
-        selfJustification:
-          k.showTarget !== false && k.target !== undefined && k.target !== null
-            ? `Achieved benchmark target of ${initialActual} ${k.unit} during ${fiscalYear} ${quarter}.`
-            : `Achieved performance score of ${initialActual} during ${fiscalYear} ${quarter}.`,
+        selfJustification: formattedTarget
+          ? `Achieved benchmark target (${formattedTarget}) during ${fiscalYear} ${quarter}.`
+          : `Achieved performance score of ${initialActual} during ${fiscalYear} ${quarter}.`,
         managerComments: '',
       };
     });
@@ -262,11 +272,15 @@ export const PerformModule: React.FC<{
     const updatedItems = sc.items.map((item) => {
       if (item.kpiId !== kpiId) return item;
       const next = { ...item, ...changes };
-      if (changes.actual !== undefined || changes.target !== undefined) {
+      if (
+        changes.actual !== undefined ||
+        changes.target !== undefined ||
+        changes.targetType !== undefined
+      ) {
         next.selfScore = calculateKpiScore(
-          next.scoringFormula,
           next.actual,
-          next.target
+          next.target,
+          resolveTargetValueType(next)
         );
       }
       return next;
@@ -700,7 +714,7 @@ export const PerformModule: React.FC<{
                     </div>
                     <p className="text-xs text-neutral-500 mt-1">
                       Cycle: <strong>{fiscalYear}</strong> •{' '}
-                      <strong>{quarter}</strong> • Deterministic 5-Algorithm Scoring Engine
+                      <strong>{quarter}</strong>
                     </p>
                   </div>
 
@@ -795,7 +809,6 @@ export const PerformModule: React.FC<{
                   headers={[
                     '#',
                     'KPI & Pillar',
-                    'Algorithm',
                     'Target',
                     'Actual Input',
                     'Weight',
@@ -815,6 +828,9 @@ export const PerformModule: React.FC<{
                       item.showTarget !== undefined
                         ? item.showTarget
                         : masterKpi?.showTarget !== false;
+                    const effTargetType = resolveTargetValueType(
+                      item.targetType ? item : masterKpi || item
+                    );
                     const isHighImpact = item.weightage >= 8;
                     const isEditable = myScorecard.status === 'Draft';
 
@@ -841,51 +857,29 @@ export const PerformModule: React.FC<{
                             {effCategory} — {effDesc}
                           </div>
                         </td>
-                        <td className="px-3 py-3">
-                          <Badge variant="neutral" className="font-mono text-[10px]">
-                            {item.scoringFormula}
-                          </Badge>
-                        </td>
                         <td className="px-3 py-3 text-xs font-mono whitespace-nowrap">
-                          {effShowTarget &&
-                          item.target !== undefined &&
-                          item.target !== null
-                            ? `${item.target} ${item.unit}`
-                            : ''}
+                          {formatTargetDisplay(
+                            item.target,
+                            effTargetType,
+                            item.unit,
+                            effShowTarget
+                          )}
                         </td>
                         <td className="px-3 py-3 w-32">
-                          {item.scoringFormula === 'BOOLEAN_BINARY' ? (
-                            <select
-                              disabled={!isEditable}
-                              value={item.actual}
-                              onChange={(e) =>
-                                handleUpdateScorecardItem(
-                                  myScorecard,
-                                  item.kpiId,
-                                  { actual: Number(e.target.value) }
-                                )
-                              }
-                              className="w-full px-2 py-1.5 text-xs font-mono border border-neutral-300 rounded-lg bg-white disabled:bg-neutral-100"
-                            >
-                              <option value={1}>1 (Pass = 100%)</option>
-                              <option value={0}>0 (Fail = 0%)</option>
-                            </select>
-                          ) : (
-                            <input
-                              type="number"
-                              step="any"
-                              disabled={!isEditable}
-                              value={item.actual}
-                              onChange={(e) =>
-                                handleUpdateScorecardItem(
-                                  myScorecard,
-                                  item.kpiId,
-                                  { actual: Number(e.target.value) }
-                                )
-                              }
-                              className="w-24 px-2.5 py-1.5 text-xs font-mono font-bold border border-neutral-300 rounded-lg disabled:bg-neutral-100"
-                            />
-                          )}
+                          <input
+                            type="number"
+                            step="any"
+                            disabled={!isEditable}
+                            value={item.actual}
+                            onChange={(e) =>
+                              handleUpdateScorecardItem(
+                                myScorecard,
+                                item.kpiId,
+                                { actual: Number(e.target.value) }
+                              )
+                            }
+                            className="w-24 px-2.5 py-1.5 text-xs font-mono font-bold border border-neutral-300 rounded-lg disabled:bg-neutral-100"
+                          />
                         </td>
                         <td className="px-3 py-3 text-xs font-mono font-bold">
                           {item.weightage}%
@@ -1272,11 +1266,10 @@ export const PerformModule: React.FC<{
             <Table
               headers={[
                 'KPI Title & Description',
-                'Formula',
                 'Weight',
                 'Target Visibility',
+                'Data Type',
                 'Target Value',
-                'Unit',
               ]}
             >
               {targetModalSc.items.map((item) => {
@@ -1287,6 +1280,9 @@ export const PerformModule: React.FC<{
                   item.showTarget !== undefined
                     ? item.showTarget
                     : masterKpi?.showTarget !== false;
+                const effTargetType = resolveTargetValueType(
+                  item.targetType ? item : masterKpi || item
+                );
 
                 return (
                   <tr key={item.kpiId}>
@@ -1297,9 +1293,6 @@ export const PerformModule: React.FC<{
                       <div className="text-[10px] text-neutral-500 mt-0.5">
                         {effDesc}
                       </div>
-                    </td>
-                    <td className="px-3 py-2 text-[11px] font-mono">
-                      {item.scoringFormula}
                     </td>
                     <td className="px-3 py-2 text-xs font-mono">
                       {item.weightage}%
@@ -1333,28 +1326,103 @@ export const PerformModule: React.FC<{
                     </td>
                     <td className="px-3 py-2">
                       {isTargetVisible ? (
-                        <input
-                          type="number"
-                          step="any"
-                          value={item.target ?? ''}
-                          onChange={(e) =>
+                        <select
+                          value={effTargetType}
+                          onChange={(e) => {
+                            const nextType = e.target.value as TargetValueType;
+                            let nextTarget = item.target;
+                            if (
+                              nextType !== 'Text' &&
+                              typeof nextTarget === 'string' &&
+                              nextTarget.trim() !== '' &&
+                              Number.isNaN(Number(nextTarget))
+                            ) {
+                              nextTarget = undefined;
+                            } else if (
+                              nextType !== 'Text' &&
+                              typeof nextTarget === 'string' &&
+                              nextTarget.trim() !== ''
+                            ) {
+                              nextTarget = Number(nextTarget);
+                            }
                             handleUpdateScorecardItem(
                               targetModalSc,
                               item.kpiId,
                               {
-                                target:
-                                  e.target.value.trim() === ''
-                                    ? undefined
-                                    : Number(e.target.value),
+                                targetType: nextType,
+                                target: nextTarget,
+                                unit:
+                                  nextType === 'Percentage'
+                                    ? '%'
+                                    : nextType === 'Text'
+                                    ? ''
+                                    : item.unit === '%'
+                                    ? ''
+                                    : item.unit,
                               }
-                            )
-                          }
-                          className="w-24 px-2 py-1 text-xs font-mono border border-neutral-300 rounded-lg"
-                        />
+                            );
+                          }}
+                          className="px-2 py-1 text-xs border border-neutral-300 rounded-lg bg-white"
+                        >
+                          {TARGET_VALUE_TYPES.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">
-                      {isTargetVisible ? item.unit : ''}
+                    <td className="px-3 py-2">
+                      {isTargetVisible ? (
+                        effTargetType === 'Text' ? (
+                          <input
+                            type="text"
+                            placeholder="Enter target text..."
+                            value={item.target ?? ''}
+                            onChange={(e) =>
+                              handleUpdateScorecardItem(
+                                targetModalSc,
+                                item.kpiId,
+                                {
+                                  target:
+                                    e.target.value.trim() === ''
+                                      ? undefined
+                                      : e.target.value,
+                                }
+                              )
+                            }
+                            className="w-32 px-2 py-1 text-xs border border-neutral-300 rounded-lg"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step="any"
+                              min={effTargetType === 'Percentage' ? 0 : undefined}
+                              max={effTargetType === 'Percentage' ? 100 : undefined}
+                              value={item.target ?? ''}
+                              onChange={(e) =>
+                                handleUpdateScorecardItem(
+                                  targetModalSc,
+                                  item.kpiId,
+                                  {
+                                    target:
+                                      e.target.value.trim() === ''
+                                        ? undefined
+                                        : Number(e.target.value),
+                                  }
+                                )
+                              }
+                              className="w-24 px-2 py-1 text-xs font-mono border border-neutral-300 rounded-lg"
+                            />
+                            {effTargetType === 'Percentage' && (
+                              <span className="text-xs font-mono text-neutral-500">
+                                %
+                              </span>
+                            )}
+                          </div>
+                        )
+                      ) : null}
                     </td>
                   </tr>
                 );
@@ -1401,6 +1469,15 @@ export const PerformModule: React.FC<{
                   item.showTarget !== undefined
                     ? item.showTarget
                     : masterKpi?.showTarget !== false;
+                const effTargetType = resolveTargetValueType(
+                  item.targetType ? item : masterKpi || item
+                );
+                const formattedTarget = formatTargetDisplay(
+                  item.target,
+                  effTargetType,
+                  item.unit,
+                  effShowTarget
+                );
 
                 return (
                   <tr key={item.kpiId}>
@@ -1416,11 +1493,9 @@ export const PerformModule: React.FC<{
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-xs font-mono">
-                      {effShowTarget &&
-                      item.target !== undefined &&
-                      item.target !== null
-                        ? `${item.actual} / ${item.target} ${item.unit}`
-                        : `${item.actual} ${item.unit}`}
+                      {formattedTarget
+                        ? `${item.actual} / ${formattedTarget}`
+                        : `${item.actual}`}
                     </td>
                   <td className="px-3 py-2.5 text-xs font-mono">
                     {item.weightage}%

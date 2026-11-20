@@ -161,6 +161,8 @@ export interface FiscalSettings {
 }
 
 // 2. Perform Module Types
+export type TargetValueType = 'Text' | 'Number' | 'Percentage';
+
 export type ScoringFormula =
   | 'DIRECT_PROPORTION'
   | 'INVERSE_PROPORTION'
@@ -197,11 +199,12 @@ export interface PerformKpiMaster {
   title: string;
   description: string;
   category: PerformancePillar;
-  target?: number; // Optional Default Target
+  target?: number | string; // Optional Default Target (Text, Number, or Percentage)
+  targetType?: TargetValueType; // Data type of Target Value
   showTarget?: boolean; // Controls whether the target is visible (default true)
   unit: string;
   weightage: number; // 15 KPIs per level summing to 100
-  scoringFormula: ScoringFormula;
+  scoringFormula?: ScoringFormula;
   isHighImpact?: boolean;
 }
 
@@ -210,12 +213,13 @@ export interface PerformScorecardItem {
   title: string;
   description: string;
   category: string;
-  target?: number; // Optional Default Target
+  target?: number | string; // Optional Default Target (Text, Number, or Percentage)
+  targetType?: TargetValueType; // Data type of Target Value
   showTarget?: boolean; // Controls whether the target is visible (default true)
-  isCustomized?: boolean; // Admin KPI Assignment override: title/description/target set per employee+quarter
+  isCustomized?: boolean; // Admin KPI Assignment override: title/description/target/weightage set per employee+quarter
   unit: string;
   weightage: number;
-  scoringFormula: ScoringFormula;
+  scoringFormula?: ScoringFormula;
   actual: number;
   selfScore: number;
   managerScore: number;

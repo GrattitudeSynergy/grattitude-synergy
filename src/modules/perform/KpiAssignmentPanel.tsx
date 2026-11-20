@@ -27,6 +27,9 @@ import {
 } from '../../core/services/fiscalService';
 import { SEED_GRADE_CONFIG } from '../../core/seedData';
 import {
+  TARGET_VALUE_TYPES,
+  resolveTargetValueType,
+  formatTargetDisplay,
   calculateKpiScore,
   calculateTotalWeightedScore,
   resolveLetterGrade,
@@ -34,6 +37,7 @@ import {
 import type {
   Employee,
   Quarter,
+  TargetValueType,
   PerformKpiMaster,
   PerformScorecard,
   PerformScorecardItem,
@@ -66,8 +70,18 @@ const stripUndefined = <T extends object>(obj: T): T => {
   return out as T;
 };
 
-const hasTarget = (t: unknown): t is number =>
-  typeof t === 'number' && Number.isFinite(t);
+const hasValidTarget = (
+  t: unknown,
+  targetType: TargetValueType
+): t is number | string => {
+  if (targetType === 'Text') {
+    return typeof t === 'string' && t.trim().length > 0;
+  }
+  const num = typeof t === 'number' ? t : typeof t === 'string' && t.trim() !== '' ? Number(t) : NaN;
+  if (!Number.isFinite(num)) return false;
+  if (targetType === 'Percentage') return num >= 0 && num <= 100;
+  return true;
+};
 
 export const KpiAssignmentPanel: React.FC<{
   currentAdmin: Employee;
@@ -163,29 +177,37 @@ export const KpiAssignmentPanel: React.FC<{
   const buildTemplateItems = (): PerformScorecardItem[] =>
     levelTemplate.map((k) => {
       const showTarget = k.showTarget !== false;
-      const target = showTarget && hasTarget(k.target) ? k.target : undefined;
+      const targetType = resolveTargetValueType(k);
+      const target =
+        showTarget && hasValidTarget(k.target, targetType)
+          ? k.target
+          : undefined;
       const initialActual =
-        k.scoringFormula === 'BOOLEAN_BINARY'
-          ? 1
-          : hasTarget(target)
-          ? target
+        targetType !== 'Text' && target !== undefined && Number.isFinite(Number(target))
+          ? Number(target)
           : 100;
+      const formattedTarget = formatTargetDisplay(
+        target,
+        targetType,
+        k.unit,
+        showTarget
+      );
       return {
         kpiId: k.id,
         title: k.title,
         description: k.description,
         category: k.category,
         target,
+        targetType,
         showTarget,
-        unit: k.unit,
+        unit: targetType === 'Percentage' ? '%' : targetType === 'Text' ? '' : k.unit,
         weightage: k.weightage,
-        scoringFormula: k.scoringFormula,
         actual: initialActual,
-        selfScore: calculateKpiScore(k.scoringFormula, initialActual, target),
+        selfScore: calculateKpiScore(initialActual, target, targetType),
         managerScore: 0,
         ceoScore: 0,
-        selfJustification: hasTarget(target)
-          ? `Achieved benchmark target of ${initialActual} ${k.unit} during ${fiscalYear} ${quarter}.`
+        selfJustification: formattedTarget
+          ? `Achieved benchmark target (${formattedTarget}) during ${fiscalYear} ${quarter}.`
           : `Achieved performance score of ${initialActual} during ${fiscalYear} ${quarter}.`,
         managerComments: '',
       };
@@ -210,6 +232,7 @@ export const KpiAssignmentPanel: React.FC<{
     setDraftItems(
       base.map((i) => ({
         ...i,
+        targetType: resolveTargetValueType(i),
         showTarget: i.showTarget !== false,
       }))
     );
@@ -245,11 +268,15 @@ export const KpiAssignmentPanel: React.FC<{
     const enabling = item.showTarget === false;
     if (enabling) {
       const master = masterById.get(item.kpiId);
+      const nextType = resolveTargetValueType(
+        item.targetType ? item : master || item
+      );
       updateDraft(item.kpiId, {
         showTarget: true,
-        target: hasTarget(item.target)
+        targetType: nextType,
+        target: hasValidTarget(item.target, nextType)
           ? item.target
-          : hasTarget(master?.target)
+          : hasValidTarget(master?.target, nextType)
           ? master!.target
           : undefined,
       });
@@ -258,15 +285,54 @@ export const KpiAssignmentPanel: React.FC<{
     }
   };
 
+  const handleChangeTargetType = (
+    item: PerformScorecardItem,
+    nextType: TargetValueType
+  ) => {
+    let nextTarget = item.target;
+    if (
+      nextType !== 'Text' &&
+      typeof nextTarget === 'string' &&
+      nextTarget.trim() !== '' &&
+      Number.isNaN(Number(nextTarget))
+    ) {
+      nextTarget = undefined;
+    } else if (
+      nextType !== 'Text' &&
+      typeof nextTarget === 'string' &&
+      nextTarget.trim() !== ''
+    ) {
+      nextTarget = Number(nextTarget);
+    }
+    updateDraft(item.kpiId, {
+      targetType: nextType,
+      target: nextTarget,
+      unit:
+        nextType === 'Percentage'
+          ? '%'
+          : nextType === 'Text'
+          ? ''
+          : item.unit === '%'
+          ? ''
+          : item.unit,
+    });
+  };
+
   const handleResetItemToTemplate = (kpiId: string) => {
     const master = masterById.get(kpiId);
     if (!master) return;
     const showTarget = master.showTarget !== false;
+    const targetType = resolveTargetValueType(master);
     updateDraft(kpiId, {
       title: master.title,
       description: master.description,
       showTarget,
-      target: showTarget && hasTarget(master.target) ? master.target : undefined,
+      targetType,
+      target:
+        showTarget && hasValidTarget(master.target, targetType)
+          ? master.target
+          : undefined,
+      unit: master.unit,
       weightage: master.weightage,
     });
   };
@@ -278,13 +344,18 @@ export const KpiAssignmentPanel: React.FC<{
         const master = masterById.get(i.kpiId);
         if (!master) return i;
         const showTarget = master.showTarget !== false;
+        const targetType = resolveTargetValueType(master);
         return {
           ...i,
           title: master.title,
           description: master.description,
           showTarget,
+          targetType,
           target:
-            showTarget && hasTarget(master.target) ? master.target : undefined,
+            showTarget && hasValidTarget(master.target, targetType)
+              ? master.target
+              : undefined,
+          unit: master.unit,
           weightage: master.weightage,
         };
       })
@@ -298,13 +369,22 @@ export const KpiAssignmentPanel: React.FC<{
     if (!master) return true;
     const masterShow = master.showTarget !== false;
     const itemShow = item.showTarget !== false;
-    const masterTarget = masterShow && hasTarget(master.target) ? master.target : undefined;
-    const itemTarget = itemShow && hasTarget(item.target) ? item.target : undefined;
+    const masterType = resolveTargetValueType(master);
+    const itemType = resolveTargetValueType(item);
+    const masterTarget =
+      masterShow && hasValidTarget(master.target, masterType)
+        ? master.target
+        : undefined;
+    const itemTarget =
+      itemShow && hasValidTarget(item.target, itemType)
+        ? item.target
+        : undefined;
     return (
       item.title.trim() !== master.title ||
       item.description.trim() !== master.description ||
       itemShow !== masterShow ||
-      itemTarget !== masterTarget ||
+      itemType !== masterType ||
+      String(itemTarget ?? '') !== String(masterTarget ?? '') ||
       item.weightage !== master.weightage
     );
   };
@@ -336,11 +416,14 @@ export const KpiAssignmentPanel: React.FC<{
         showToast('error', 'KPI Title Required', `KPI ${item.kpiId} needs a title.`);
         return;
       }
-      if (item.showTarget !== false && !hasTarget(item.target)) {
+      const itemType = resolveTargetValueType(item);
+      if (item.showTarget !== false && !hasValidTarget(item.target, itemType)) {
         showToast(
           'error',
           'Target Value Required',
-          `"${item.title}" has Target Applicable switched on. Enter a target value or switch it off.`
+          itemType === 'Percentage'
+            ? `"${item.title}" requires a Percentage target between 0 and 100, or switch Target Applicable off.`
+            : `"${item.title}" has Target Applicable switched on. Enter a valid ${itemType} target value or switch it off.`
         );
         return;
       }
@@ -384,28 +467,46 @@ export const KpiAssignmentPanel: React.FC<{
         const d = draftById.get(orig.kpiId);
         if (!d) return orig;
         const showTarget = d.showTarget !== false;
-        const target = showTarget && hasTarget(d.target) ? d.target : undefined;
+        const targetType = resolveTargetValueType(d);
+        const target =
+          showTarget && hasValidTarget(d.target, targetType)
+            ? targetType === 'Text'
+              ? String(d.target).trim()
+              : Number(d.target)
+            : undefined;
         const nextWeightage = Number.isFinite(d.weightage) ? d.weightage : 0;
+        const nextUnit =
+          targetType === 'Percentage'
+            ? '%'
+            : targetType === 'Text'
+            ? ''
+            : d.unit;
         const next: PerformScorecardItem = {
           ...orig,
           title: d.title.trim(),
           description: d.description.trim(),
           showTarget,
+          targetType,
           target,
+          unit: nextUnit,
           weightage: nextWeightage,
         };
         next.isCustomized = computeIsCustomized(next);
 
+        const prevType = resolveTargetValueType(orig);
         const prevTarget =
-          orig.showTarget !== false && hasTarget(orig.target) ? orig.target : undefined;
-        if (prevTarget !== target) {
-          next.selfScore = calculateKpiScore(next.scoringFormula, next.actual, target);
+          orig.showTarget !== false && hasValidTarget(orig.target, prevType)
+            ? orig.target
+            : undefined;
+        if (String(prevTarget ?? '') !== String(target ?? '') || prevType !== targetType) {
+          next.selfScore = calculateKpiScore(next.actual, target, targetType);
         }
         if (
           next.title !== orig.title ||
           next.description !== orig.description ||
           (orig.showTarget !== false) !== showTarget ||
-          prevTarget !== target ||
+          prevType !== targetType ||
+          String(prevTarget ?? '') !== String(target ?? '') ||
           orig.weightage !== nextWeightage
         ) {
           changedCount++;
@@ -518,18 +619,32 @@ export const KpiAssignmentPanel: React.FC<{
 
       const preparedItems: PerformScorecardItem[] = draftItems.map((d) => {
         const showTarget = d.showTarget !== false;
-        const target = showTarget && hasTarget(d.target) ? d.target : undefined;
+        const targetType = resolveTargetValueType(d);
+        const target =
+          showTarget && hasValidTarget(d.target, targetType)
+            ? targetType === 'Text'
+              ? String(d.target).trim()
+              : Number(d.target)
+            : undefined;
         const nextWeightage = Number.isFinite(d.weightage) ? d.weightage : 0;
+        const nextUnit =
+          targetType === 'Percentage'
+            ? '%'
+            : targetType === 'Text'
+            ? ''
+            : d.unit;
         const next: PerformScorecardItem = {
           ...d,
           title: d.title.trim(),
           description: d.description.trim(),
           showTarget,
+          targetType,
           target,
+          unit: nextUnit,
           weightage: nextWeightage,
         };
         next.isCustomized = computeIsCustomized(next);
-        next.selfScore = calculateKpiScore(next.scoringFormula, next.actual, target);
+        next.selfScore = calculateKpiScore(next.actual, target, targetType);
         return stripUndefined(next);
       });
 
@@ -849,6 +964,7 @@ export const KpiAssignmentPanel: React.FC<{
               'KPI Title',
               'KPI Description',
               'Target Applicable',
+              'Data Type',
               'Target Value',
               'Weightage (%)',
               '',
@@ -856,6 +972,7 @@ export const KpiAssignmentPanel: React.FC<{
           >
             {(draftItems || []).map((item, idx) => {
               const targetOn = item.showTarget !== false;
+              const targetType = resolveTargetValueType(item);
               const customized = computeIsCustomized(item);
               return (
                 <tr key={item.kpiId} className="align-top hover:bg-neutral-50">
@@ -916,27 +1033,82 @@ export const KpiAssignmentPanel: React.FC<{
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap">
                     {targetOn && (
-                      <div className="flex items-center gap-1.5">
+                      <select
+                        disabled={isLocked}
+                        value={targetType}
+                        onChange={(e) =>
+                          handleChangeTargetType(
+                            item,
+                            e.target.value as TargetValueType
+                          )
+                        }
+                        aria-label={`Target data type for ${item.title}`}
+                        className="px-2.5 py-1.5 text-xs font-medium border border-neutral-300 rounded-lg bg-white disabled:bg-neutral-100"
+                      >
+                        {TARGET_VALUE_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    {targetOn &&
+                      (targetType === 'Text' ? (
                         <input
-                          type="number"
-                          step="any"
+                          type="text"
                           disabled={isLocked}
-                          value={hasTarget(item.target) ? item.target : ''}
+                          placeholder="Enter target text..."
+                          value={item.target ?? ''}
                           onChange={(e) =>
                             updateDraft(item.kpiId, {
                               target:
                                 e.target.value.trim() === ''
                                   ? undefined
-                                  : Number(e.target.value),
+                                  : e.target.value,
                             })
                           }
-                          className="w-24 px-2.5 py-1.5 text-xs font-mono font-bold border border-neutral-300 rounded-lg disabled:bg-neutral-100"
+                          aria-label={`Target value for ${item.title}`}
+                          className="w-36 px-2.5 py-1.5 text-xs border border-neutral-300 rounded-lg disabled:bg-neutral-100"
                         />
-                        <span className="text-[11px] text-neutral-500">
-                          {item.unit}
-                        </span>
-                      </div>
-                    )}
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            step="any"
+                            min={targetType === 'Percentage' ? 0 : undefined}
+                            max={targetType === 'Percentage' ? 100 : undefined}
+                            disabled={isLocked}
+                            placeholder={
+                              targetType === 'Percentage' ? '0–100' : '0'
+                            }
+                            value={item.target ?? ''}
+                            onChange={(e) =>
+                              updateDraft(item.kpiId, {
+                                target:
+                                  e.target.value.trim() === ''
+                                    ? undefined
+                                    : Number(e.target.value),
+                              })
+                            }
+                            aria-label={`Target value for ${item.title}`}
+                            className="w-24 px-2.5 py-1.5 text-xs font-mono font-bold border border-neutral-300 rounded-lg disabled:bg-neutral-100"
+                          />
+                          {targetType === 'Percentage' ? (
+                            <span className="text-xs font-mono font-bold text-neutral-500">
+                              %
+                            </span>
+                          ) : (
+                            item.unit &&
+                            item.unit !== '%' && (
+                              <span className="text-[11px] text-neutral-500">
+                                {item.unit}
+                              </span>
+                            )
+                          )}
+                        </div>
+                      ))}
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap">
                     <div className="flex items-center gap-1">
