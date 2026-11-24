@@ -8,6 +8,7 @@ import {
   Search,
   Calendar,
   Smartphone,
+  Tablet,
   Laptop,
   CheckCircle2,
   Eye,
@@ -33,6 +34,8 @@ import { AuditService } from '../../core/services/auditService';
 import {
   DEFAULT_OFFICE_RADIUS_METERS,
   evaluateAttendanceLocation,
+  normalizeLocationStatus,
+  normalizeDeviceType,
   formatDistanceLabel,
   isSecureGeolocationContext,
 } from './locationEngine';
@@ -40,7 +43,9 @@ import type {
   Employee,
   ShowupAttendanceRecord,
   AttendanceGeoLocation,
-  AttendanceLocationStatus,
+  NormalizedLocationStatus,
+  AttendanceDeviceType,
+  AttendanceDeviceInfo,
   OfficeLocationConfig,
   AuditLogEntry,
 } from '../../core/types';
@@ -66,7 +71,10 @@ export const AdminGpsDashboard: React.FC<{
   const [selectedEmpId, setSelectedEmpId] = useState<string>('ALL');
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const [selectedLocationStatus, setSelectedLocationStatus] = useState<
-    'ALL' | AttendanceLocationStatus
+    'ALL' | NormalizedLocationStatus
+  >('ALL');
+  const [selectedDeviceType, setSelectedDeviceType] = useState<
+    'ALL' | AttendanceDeviceType
   >('ALL');
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [selectedMapTarget, setSelectedMapTarget] =
@@ -324,36 +332,151 @@ export const AdminGpsDashboard: React.FC<{
   };
 
   /**
-   * Resolves the effective location status and distance for any attendance record,
-   * supporting both newly recorded records (with explicit locationStatus) and legacy GPS records.
+   * Independently resolves Check-In location status, distance, timestamp, and device info.
    */
-  const resolveRecordLocationStatus = (
+  const resolveCheckInSummary = (
     rec: ShowupAttendanceRecord,
     checkIn?: AttendanceGeoLocation
   ): {
-    status: AttendanceLocationStatus;
+    timestamp?: string;
+    status: NormalizedLocationStatus;
     distanceMeters?: number;
+    unavailableReason?: string;
+    device: AttendanceDeviceInfo;
   } => {
+    const firstInPunch = rec.punches?.find((p) => p.type === 'IN');
+    const timestamp =
+      rec.checkInTimestamp || checkIn?.timestamp || firstInPunch?.timestamp;
+
+    const rawDevice =
+      rec.checkInDevice || firstInPunch?.deviceInfo || checkIn?.deviceInfo;
+    const device: AttendanceDeviceInfo = rawDevice
+      ? {
+          ...rawDevice,
+          deviceType: normalizeDeviceType(rawDevice.deviceType),
+        }
+      : {
+          deviceType: normalizeDeviceType(checkIn?.deviceType),
+          os: 'Unknown',
+          browser: 'Unknown',
+          userAgent: 'Unknown',
+        };
+
     if (checkIn) {
       const liveEval = officeLocation
         ? evaluateAttendanceLocation(checkIn, officeLocation)
         : null;
       return {
-        status:
-          rec.locationStatus ||
-          checkIn.locationStatus ||
-          liveEval?.locationStatus ||
-          'Outside Office',
+        timestamp,
+        status: normalizeLocationStatus(
+          rec.checkInLocationStatus ||
+            rec.locationStatus ||
+            checkIn.locationStatus ||
+            liveEval?.locationStatus ||
+            'Outside Office'
+        ),
         distanceMeters:
+          rec.checkInDistanceFromOfficeMeters ??
           rec.distanceFromOfficeMeters ??
           checkIn.distanceFromOfficeMeters ??
           liveEval?.distanceFromOfficeMeters,
+        device,
       };
     }
+
     return {
-      status: rec.locationStatus || 'Location Unavailable',
+      timestamp,
+      status: normalizeLocationStatus(
+        rec.checkInLocationStatus || rec.locationStatus || 'Location Unavailable'
+      ),
       distanceMeters: undefined,
+      unavailableReason:
+        rec.checkInLocationUnavailableReason || rec.locationUnavailableReason,
+      device,
     };
+  };
+
+  /**
+   * Independently resolves Check-Out location status, distance, timestamp, and device info.
+   * Never copies Check-In location or device onto Check-Out.
+   */
+  const resolveCheckOutSummary = (
+    rec: ShowupAttendanceRecord,
+    checkOut?: AttendanceGeoLocation
+  ): {
+    hasCheckedOut: boolean;
+    timestamp?: string;
+    status?: NormalizedLocationStatus;
+    distanceMeters?: number;
+    unavailableReason?: string;
+    device?: AttendanceDeviceInfo;
+  } => {
+    const lastOutPunch = [...(rec.punches || [])]
+      .reverse()
+      .find((p) => p.type === 'OUT');
+    const timestamp =
+      rec.checkOutTimestamp || checkOut?.timestamp || lastOutPunch?.timestamp;
+    const hasCheckedOut = Boolean(timestamp || checkOut || lastOutPunch);
+
+    if (!hasCheckedOut) {
+      return { hasCheckedOut: false };
+    }
+
+    const rawDevice =
+      rec.checkOutDevice || lastOutPunch?.deviceInfo || checkOut?.deviceInfo;
+    const device: AttendanceDeviceInfo = rawDevice
+      ? {
+          ...rawDevice,
+          deviceType: normalizeDeviceType(rawDevice.deviceType),
+        }
+      : {
+          deviceType: normalizeDeviceType(checkOut?.deviceType),
+          os: 'Unknown',
+          browser: 'Unknown',
+          userAgent: 'Unknown',
+        };
+
+    if (checkOut) {
+      const liveEval = officeLocation
+        ? evaluateAttendanceLocation(checkOut, officeLocation)
+        : null;
+      return {
+        hasCheckedOut: true,
+        timestamp,
+        status: normalizeLocationStatus(
+          rec.checkOutLocationStatus ||
+            checkOut.locationStatus ||
+            liveEval?.locationStatus ||
+            'Outside Office'
+        ),
+        distanceMeters:
+          rec.checkOutDistanceFromOfficeMeters ??
+          checkOut.distanceFromOfficeMeters ??
+          liveEval?.distanceFromOfficeMeters,
+        device,
+      };
+    }
+
+    return {
+      hasCheckedOut: true,
+      timestamp,
+      status: normalizeLocationStatus(
+        rec.checkOutLocationStatus || 'Location Unavailable'
+      ),
+      distanceMeters: undefined,
+      unavailableReason: rec.checkOutLocationUnavailableReason,
+      device,
+    };
+  };
+
+  const renderDeviceIcon = (type: AttendanceDeviceType) => {
+    if (type === 'Mobile Phone') {
+      return <Smartphone className="w-3.5 h-3.5 text-sky-600 shrink-0" />;
+    }
+    if (type === 'Tablet') {
+      return <Tablet className="w-3.5 h-3.5 text-indigo-600 shrink-0" />;
+    }
+    return <Laptop className="w-3.5 h-3.5 text-neutral-600 shrink-0" />;
   };
 
   const departments = Array.from(
@@ -367,8 +490,9 @@ export const AdminGpsDashboard: React.FC<{
 
   const filteredRecords = sortedRecords.filter((rec) => {
     const meta = getEmployeeMeta(rec.employeeId, rec.employeeName);
-    const { checkIn } = resolveRecordLocations(rec);
-    const locMeta = resolveRecordLocationStatus(rec, checkIn);
+    const { checkIn, checkOut } = resolveRecordLocations(rec);
+    const inMeta = resolveCheckInSummary(rec, checkIn);
+    const outMeta = resolveCheckOutSummary(rec, checkOut);
 
     if (selectedEmpId !== 'ALL') {
       const selNorm = PermissionsService.normalizeEmpId(selectedEmpId);
@@ -378,11 +502,18 @@ export const AdminGpsDashboard: React.FC<{
     if (selectedDept !== 'ALL' && meta.department !== selectedDept) {
       return false;
     }
-    if (
-      selectedLocationStatus !== 'ALL' &&
-      locMeta.status !== selectedLocationStatus
-    ) {
-      return false;
+    if (selectedLocationStatus !== 'ALL') {
+      const matchesIn = inMeta.status === selectedLocationStatus;
+      const matchesOut =
+        outMeta.hasCheckedOut && outMeta.status === selectedLocationStatus;
+      if (!matchesIn && !matchesOut) return false;
+    }
+    if (selectedDeviceType !== 'ALL') {
+      const matchesInDev = inMeta.device.deviceType === selectedDeviceType;
+      const matchesOutDev =
+        outMeta.hasCheckedOut &&
+        outMeta.device?.deviceType === selectedDeviceType;
+      if (!matchesInDev && !matchesOutDev) return false;
     }
     if (selectedDate && rec.date !== selectedDate) {
       return false;
@@ -394,7 +525,10 @@ export const AdminGpsDashboard: React.FC<{
         meta.ecode.toLowerCase().includes(q) ||
         meta.department.toLowerCase().includes(q) ||
         rec.date.includes(q) ||
-        locMeta.status.toLowerCase().includes(q);
+        inMeta.status.toLowerCase().includes(q) ||
+        inMeta.device.deviceType.toLowerCase().includes(q) ||
+        (outMeta.status || '').toLowerCase().includes(q) ||
+        (outMeta.device?.deviceType || '').toLowerCase().includes(q);
       if (!match) return false;
     }
     return true;
@@ -404,17 +538,15 @@ export const AdminGpsDashboard: React.FC<{
   const todayRecords = attendanceRecords.filter((r) => r.date === todayStr);
   const todayOfficeCount = todayRecords.filter((r) => {
     const { checkIn } = resolveRecordLocations(r);
-    return resolveRecordLocationStatus(r, checkIn).status === 'Office';
+    return resolveCheckInSummary(r, checkIn).status === 'In Office';
   }).length;
   const todayOutsideCount = todayRecords.filter((r) => {
     const { checkIn } = resolveRecordLocations(r);
-    return resolveRecordLocationStatus(r, checkIn).status === 'Outside Office';
+    return resolveCheckInSummary(r, checkIn).status === 'Outside Office';
   }).length;
   const todayUnavailableCount = todayRecords.filter((r) => {
     const { checkIn } = resolveRecordLocations(r);
-    return (
-      resolveRecordLocationStatus(r, checkIn).status === 'Location Unavailable'
-    );
+    return resolveCheckInSummary(r, checkIn).status === 'Location Unavailable';
   }).length;
 
   const handleInspectOnGoogleMaps = async (
@@ -697,14 +829,14 @@ export const AdminGpsDashboard: React.FC<{
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-sky-600" />
             <span>
-              Employee Attendance Location Status &amp; GPS Inspector
+              Employee Attendance Location &amp; Device Audit Table
             </span>
           </div>
         }
-        subtitle="Strict Admin-Only View: Filter by date, employee, department, or location status (Office, Outside Office, Location Unavailable). Detailed GPS coordinates are restricted to Admin."
+        subtitle="Strict Admin-Only View: Independent Check-In and Check-Out location status (In Office, Outside Office, Location Unavailable), device type, OS, browser, and GPS verification."
       >
         {/* Filter Controls */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -753,9 +885,23 @@ export const AdminGpsDashboard: React.FC<{
               className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
             >
               <option value="ALL">All Location Statuses</option>
-              <option value="Office">Office</option>
+              <option value="In Office">In Office</option>
               <option value="Outside Office">Outside Office</option>
               <option value="Location Unavailable">Location Unavailable</option>
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={selectedDeviceType}
+              onChange={(e) => setSelectedDeviceType(e.target.value as any)}
+              className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
+            >
+              <option value="ALL">All Device Types</option>
+              <option value="Mobile Phone">Mobile Phone</option>
+              <option value="Tablet">Tablet</option>
+              <option value="Laptop/Desktop">Laptop/Desktop</option>
+              <option value="Unknown">Unknown</option>
             </select>
           </div>
 
@@ -784,28 +930,29 @@ export const AdminGpsDashboard: React.FC<{
         {filteredRecords.length === 0 ? (
           <EmptyState
             title="No Attendance Location Records Found"
-            description="When employees check in or out via Show Up, their attendance location status (Office, Outside Office, or Location Unavailable), timestamps, and GPS details appear here."
+            description="When employees check in or out via Show Up, their independent Check-In and Check-Out location statuses (In Office, Outside Office, or Location Unavailable) and devices appear here."
           />
         ) : (
           <Table
             headers={[
               'Employee',
-              'Date & Attendance',
-              'Location Status',
-              'Check-In Time & GPS',
-              'Check-Out Time & GPS',
-              'Location History',
+              'Check-In Time',
+              'Check-In Location',
+              'Check-In Device',
+              'Check-Out Time',
+              'Check-Out Location',
+              'Check-Out Device',
             ]}
           >
             {filteredRecords.map((rec) => {
               const meta = getEmployeeMeta(rec.employeeId, rec.employeeName);
-              const { checkIn, checkOut, allGpsPunches } =
-                resolveRecordLocations(rec);
-              const locMeta = resolveRecordLocationStatus(rec, checkIn);
-              const firstInPunch = rec.punches?.find((p) => p.type === 'IN');
+              const { checkIn, checkOut } = resolveRecordLocations(rec);
+              const inMeta = resolveCheckInSummary(rec, checkIn);
+              const outMeta = resolveCheckOutSummary(rec, checkOut);
 
               return (
-                <tr key={rec.id} className="hover:bg-neutral-50/80">
+                <tr key={rec.id} className="hover:bg-neutral-50/80 align-top">
+                  {/* 1. Employee */}
                   <td className="px-4 py-3">
                     <div className="text-xs font-bold text-neutral-900">
                       {meta.name}
@@ -813,13 +960,33 @@ export const AdminGpsDashboard: React.FC<{
                     <div className="text-[11px] text-neutral-500 font-mono">
                       {meta.ecode} • {meta.department}
                     </div>
+                    {meta.empObj && (
+                      <div className="mt-1.5">
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          icon={<History className="w-3 h-3" />}
+                          onClick={() =>
+                            meta.empObj && handleOpenEmployeeHistory(meta.empObj)
+                          }
+                        >
+                          Details &amp; History
+                        </Button>
+                      </div>
+                    )}
                   </td>
 
-                  <td className="px-4 py-3">
-                    <div className="text-xs font-mono font-bold text-neutral-800">
+                  {/* 2. Check-In Time */}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="text-xs font-mono font-bold text-neutral-900">
+                      {inMeta.timestamp
+                        ? new Date(inMeta.timestamp).toLocaleTimeString()
+                        : '—'}
+                    </div>
+                    <div className="text-[11px] font-mono text-neutral-500 mt-0.5">
                       {rec.date}
                     </div>
-                    <div className="mt-1 flex items-center gap-1.5">
+                    <div className="mt-1">
                       <Badge
                         variant={
                           rec.status === 'Present'
@@ -831,183 +998,155 @@ export const AdminGpsDashboard: React.FC<{
                       >
                         {rec.status === 'Absent' ? 'Under-reported' : rec.status}
                       </Badge>
-                      <span className="text-[11px] font-mono text-neutral-500">
-                        {rec.totalHours || 0}h
-                      </span>
                     </div>
                   </td>
 
-                  {/* Location Status Column */}
+                  {/* 3. Check-In Location */}
                   <td className="px-4 py-3">
                     <Badge
                       variant={
-                        locMeta.status === 'Office'
+                        inMeta.status === 'In Office'
                           ? 'success'
-                          : locMeta.status === 'Outside Office'
+                          : inMeta.status === 'Outside Office'
                           ? 'warning'
                           : 'danger'
                       }
                     >
-                      {locMeta.status}
+                      {inMeta.status}
                     </Badge>
-                    {locMeta.distanceMeters !== undefined && (
+                    {inMeta.distanceMeters !== undefined && (
                       <div className="text-[11px] font-mono text-neutral-500 mt-1">
-                        {formatDistanceLabel(locMeta.distanceMeters)}
+                        {formatDistanceLabel(inMeta.distanceMeters)}
                       </div>
                     )}
-                  </td>
-
-                  {/* Check-In GPS Column */}
-                  <td className="px-4 py-3">
                     {checkIn ? (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-emerald-800">
-                          <Navigation className="w-3 h-3 text-emerald-600" />
-                          <span>
-                            {checkIn.latitude.toFixed(6)},{' '}
-                            {checkIn.longitude.toFixed(6)}
-                          </span>
+                      <div className="mt-1 space-y-1">
+                        <div className="text-[10px] font-mono text-neutral-500">
+                          ±{checkIn.accuracy}m •{' '}
+                          {checkIn.latitude.toFixed(5)},{' '}
+                          {checkIn.longitude.toFixed(5)}
                         </div>
-                        <div className="text-[11px] text-neutral-500 flex flex-wrap items-center gap-2">
-                          <span>
-                            Time:{' '}
-                            <strong>
-                              {new Date(checkIn.timestamp).toLocaleTimeString()}
-                            </strong>
-                          </span>
-                          <span>•</span>
-                          <span>
-                            Accuracy: <strong>±{checkIn.accuracy}m</strong>
-                          </span>
-                          {checkIn.deviceType && (
-                            <>
-                              <span>•</span>
-                              <span className="inline-flex items-center gap-0.5">
-                                {checkIn.deviceType.includes('Mobile') ? (
-                                  <Smartphone className="w-3 h-3" />
-                                ) : (
-                                  <Laptop className="w-3 h-3" />
-                                )}
-                                {checkIn.deviceType}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        <div className="pt-1 flex items-center gap-1.5">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            icon={<Eye className="w-3 h-3" />}
-                            onClick={() =>
-                              handleInspectOnGoogleMaps(rec, checkIn, 'Check-In')
-                            }
-                          >
-                            View on Google Maps
-                          </Button>
-                        </div>
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          icon={<Eye className="w-3 h-3" />}
+                          onClick={() =>
+                            handleInspectOnGoogleMaps(rec, checkIn, 'Check-In')
+                          }
+                        >
+                          View Map
+                        </Button>
                       </div>
                     ) : (
-                      <div className="space-y-0.5">
-                        {firstInPunch && (
-                          <div className="text-[11px] text-neutral-700">
-                            Check-In Time:{' '}
-                            <strong>
-                              {new Date(
-                                firstInPunch.timestamp
-                              ).toLocaleTimeString()}
-                            </strong>
-                          </div>
-                        )}
-                        <span className="text-xs text-rose-600 italic block">
-                          {rec.locationUnavailableReason ||
-                            'GPS location unavailable / permission denied'}
-                        </span>
-                      </div>
+                      inMeta.unavailableReason && (
+                        <div className="text-[10px] text-rose-600 italic mt-1 max-w-[180px]">
+                          {inMeta.unavailableReason}
+                        </div>
+                      )
                     )}
                   </td>
 
-                  {/* Check-Out GPS Column */}
+                  {/* 4. Check-In Device */}
                   <td className="px-4 py-3">
-                    {checkOut ? (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-sky-800">
-                          <Navigation className="w-3 h-3 text-sky-600" />
-                          <span>
-                            {checkOut.latitude.toFixed(6)},{' '}
-                            {checkOut.longitude.toFixed(6)}
-                          </span>
+                    <div className="inline-flex items-center gap-1.5 text-xs font-bold text-neutral-900">
+                      {renderDeviceIcon(inMeta.device.deviceType)}
+                      <span>{inMeta.device.deviceType}</span>
+                    </div>
+                    <div className="text-[11px] text-neutral-500 mt-0.5">
+                      {inMeta.device.os} • {inMeta.device.browser}
+                    </div>
+                  </td>
+
+                  {/* 5. Check-Out Time */}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {outMeta.hasCheckedOut ? (
+                      <>
+                        <div className="text-xs font-mono font-bold text-neutral-900">
+                          {outMeta.timestamp
+                            ? new Date(outMeta.timestamp).toLocaleTimeString()
+                            : '—'}
                         </div>
-                        <div className="text-[11px] text-neutral-500 flex flex-wrap items-center gap-2">
-                          <span>
-                            Time:{' '}
-                            <strong>
-                              {new Date(checkOut.timestamp).toLocaleTimeString()}
-                            </strong>
-                          </span>
-                          <span>•</span>
-                          <span>
-                            Accuracy: <strong>±{checkOut.accuracy}m</strong>
-                          </span>
-                          {checkOut.deviceType && (
-                            <>
-                              <span>•</span>
-                              <span className="inline-flex items-center gap-0.5">
-                                {checkOut.deviceType.includes('Mobile') ? (
-                                  <Smartphone className="w-3 h-3" />
-                                ) : (
-                                  <Laptop className="w-3 h-3" />
-                                )}
-                                {checkOut.deviceType}
-                              </span>
-                            </>
-                          )}
+                        <div className="text-[11px] font-mono text-neutral-500 mt-0.5">
+                          Total: {rec.totalHours || 0}h
                         </div>
-                        <div className="pt-1 flex items-center gap-1.5">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            icon={<Eye className="w-3 h-3" />}
-                            onClick={() =>
-                              handleInspectOnGoogleMaps(
-                                rec,
-                                checkOut,
-                                'Check-Out'
-                              )
-                            }
-                          >
-                            View on Google Maps
-                          </Button>
-                        </div>
-                      </div>
+                      </>
                     ) : (
                       <span className="text-xs text-neutral-400 italic">
-                        {rec.punches?.some((p) => p.type === 'OUT')
-                          ? 'No GPS captured'
-                          : 'Active Shift (Not Checked Out)'}
+                        Active Shift
                       </span>
                     )}
                   </td>
 
-                  {/* Location History Action */}
+                  {/* 6. Check-Out Location */}
                   <td className="px-4 py-3">
-                    <div className="flex flex-col items-start gap-1.5">
-                      <Badge variant="neutral">
-                        {allGpsPunches.length} GPS Punch
-                        {allGpsPunches.length === 1 ? '' : 'es'}
-                      </Badge>
-                      {meta.empObj && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          icon={<History className="w-3 h-3" />}
-                          onClick={() =>
-                            meta.empObj && handleOpenEmployeeHistory(meta.empObj)
+                    {outMeta.hasCheckedOut && outMeta.status ? (
+                      <>
+                        <Badge
+                          variant={
+                            outMeta.status === 'In Office'
+                              ? 'success'
+                              : outMeta.status === 'Outside Office'
+                              ? 'warning'
+                              : 'danger'
                           }
                         >
-                          Location History
-                        </Button>
-                      )}
-                    </div>
+                          {outMeta.status}
+                        </Badge>
+                        {outMeta.distanceMeters !== undefined && (
+                          <div className="text-[11px] font-mono text-neutral-500 mt-1">
+                            {formatDistanceLabel(outMeta.distanceMeters)}
+                          </div>
+                        )}
+                        {checkOut ? (
+                          <div className="mt-1 space-y-1">
+                            <div className="text-[10px] font-mono text-neutral-500">
+                              ±{checkOut.accuracy}m •{' '}
+                              {checkOut.latitude.toFixed(5)},{' '}
+                              {checkOut.longitude.toFixed(5)}
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              icon={<Eye className="w-3 h-3" />}
+                              onClick={() =>
+                                handleInspectOnGoogleMaps(
+                                  rec,
+                                  checkOut,
+                                  'Check-Out'
+                                )
+                              }
+                            >
+                              View Map
+                            </Button>
+                          </div>
+                        ) : (
+                          outMeta.unavailableReason && (
+                            <div className="text-[10px] text-rose-600 italic mt-1 max-w-[180px]">
+                              {outMeta.unavailableReason}
+                            </div>
+                          )
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs text-neutral-400">—</span>
+                    )}
+                  </td>
+
+                  {/* 7. Check-Out Device */}
+                  <td className="px-4 py-3">
+                    {outMeta.hasCheckedOut && outMeta.device ? (
+                      <>
+                        <div className="inline-flex items-center gap-1.5 text-xs font-bold text-neutral-900">
+                          {renderDeviceIcon(outMeta.device.deviceType)}
+                          <span>{outMeta.device.deviceType}</span>
+                        </div>
+                        <div className="text-[11px] text-neutral-500 mt-0.5">
+                          {outMeta.device.os} • {outMeta.device.browser}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-xs text-neutral-400">—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -1191,19 +1330,19 @@ export const AdminGpsDashboard: React.FC<{
         )}
       </Modal>
 
-      {/* MODAL 2: EMPLOYEE FULL GPS LOCATION HISTORY */}
+      {/* MODAL 2: EMPLOYEE FULL ATTENDANCE LOCATION & DEVICE HISTORY */}
       <Modal
         isOpen={Boolean(historyEmployee)}
         onClose={() => setHistoryEmployee(null)}
-        size="lg"
+        size="xl"
         title={
           historyEmployee
-            ? `GPS Location History — ${historyEmployee.name} (${historyEmployee.ecode})`
-            : 'Employee Location History'
+            ? `Attendance Location & Device History — ${historyEmployee.name} (${historyEmployee.ecode})`
+            : 'Employee Location & Device History'
         }
         subtitle={
           historyEmployee
-            ? `${historyEmployee.designation} • ${historyEmployee.department} • Complete historical Check-In & Check-Out GPS trail`
+            ? `${historyEmployee.designation} • ${historyEmployee.department} • Independent Check-In & Check-Out GPS, Device, OS, Browser & User-Agent audit trail`
             : ''
         }
       >
@@ -1212,66 +1351,133 @@ export const AdminGpsDashboard: React.FC<{
             {employeeHistoryRecords.length === 0 ? (
               <EmptyState
                 title="No Attendance Records for This Employee"
-                description="Once this employee checks in or out, their historical GPS locations will be listed here."
+                description="Once this employee checks in or out, their historical Check-In & Check-Out location and device details will be listed here."
               />
             ) : (
               <Table
                 headers={[
                   'Date',
-                  'Punch Type',
-                  'Timestamp',
-                  'Coordinates (Lat, Lng)',
-                  'Accuracy',
-                  'Map Action',
+                  'Action',
+                  'Time',
+                  'Location Status & GPS',
+                  'Device / OS / Browser',
+                  'Map',
                 ]}
               >
                 {employeeHistoryRecords.flatMap((rec) => {
-                  const { checkIn, checkOut, allGpsPunches } =
-                    resolveRecordLocations(rec);
-                  const entries: AttendanceGeoLocation[] =
-                    allGpsPunches.length > 0
-                      ? allGpsPunches
-                      : [checkIn, checkOut].filter(
-                          (x): x is AttendanceGeoLocation => Boolean(x)
-                        );
+                  const { checkIn, checkOut } = resolveRecordLocations(rec);
+                  const inMeta = resolveCheckInSummary(rec, checkIn);
+                  const outMeta = resolveCheckOutSummary(rec, checkOut);
 
-                  return entries.map((loc, idx) => (
-                    <tr key={`${rec.id}_${idx}`}>
-                      <td className="px-3 py-2 text-xs font-mono font-bold">
+                  const rows: Array<{
+                    key: string;
+                    action: 'Check-In' | 'Check-Out';
+                    timestamp?: string;
+                    status: NormalizedLocationStatus;
+                    distanceMeters?: number;
+                    loc?: AttendanceGeoLocation;
+                    device: AttendanceDeviceInfo;
+                  }> = [
+                    {
+                      key: `${rec.id}_in`,
+                      action: 'Check-In',
+                      timestamp: inMeta.timestamp,
+                      status: inMeta.status,
+                      distanceMeters: inMeta.distanceMeters,
+                      loc: checkIn,
+                      device: inMeta.device,
+                    },
+                  ];
+
+                  if (outMeta.hasCheckedOut && outMeta.status && outMeta.device) {
+                    rows.push({
+                      key: `${rec.id}_out`,
+                      action: 'Check-Out',
+                      timestamp: outMeta.timestamp,
+                      status: outMeta.status,
+                      distanceMeters: outMeta.distanceMeters,
+                      loc: checkOut,
+                      device: outMeta.device,
+                    });
+                  }
+
+                  return rows.map((row) => (
+                    <tr key={row.key} className="align-top">
+                      <td className="px-3 py-2 text-xs font-mono font-bold whitespace-nowrap">
                         {rec.date}
                       </td>
                       <td className="px-3 py-2">
                         <Badge
-                          variant={loc.punchType === 'IN' ? 'success' : 'info'}
+                          variant={row.action === 'Check-In' ? 'success' : 'info'}
                         >
-                          {loc.punchType === 'IN' ? 'Check-In' : 'Check-Out'}
+                          {row.action}
                         </Badge>
                       </td>
-                      <td className="px-3 py-2 text-xs font-mono">
-                        {new Date(loc.timestamp).toLocaleTimeString()}
-                      </td>
-                      <td className="px-3 py-2 text-xs font-mono font-bold text-neutral-800">
-                        {loc.latitude.toFixed(6)}, {loc.longitude.toFixed(6)}
-                      </td>
-                      <td className="px-3 py-2 text-xs font-mono text-neutral-600">
-                        ±{loc.accuracy}m
+                      <td className="px-3 py-2 text-xs font-mono whitespace-nowrap">
+                        {row.timestamp
+                          ? new Date(row.timestamp).toLocaleTimeString()
+                          : '—'}
                       </td>
                       <td className="px-3 py-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          icon={<MapPin className="w-3 h-3" />}
-                          onClick={() => {
-                            setHistoryEmployee(null);
-                            void handleInspectOnGoogleMaps(
-                              rec,
-                              loc,
-                              loc.punchType === 'IN' ? 'Check-In' : 'Check-Out'
-                            );
-                          }}
+                        <Badge
+                          variant={
+                            row.status === 'In Office'
+                              ? 'success'
+                              : row.status === 'Outside Office'
+                              ? 'warning'
+                              : 'danger'
+                          }
                         >
-                          View on Map
-                        </Button>
+                          {row.status}
+                        </Badge>
+                        {row.loc && (
+                          <div className="text-[10px] font-mono text-neutral-600 mt-1">
+                            {row.loc.latitude.toFixed(6)},{' '}
+                            {row.loc.longitude.toFixed(6)} (±{row.loc.accuracy}m)
+                            {row.distanceMeters !== undefined
+                              ? ` • ${formatDistanceLabel(row.distanceMeters)}`
+                              : ''}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="inline-flex items-center gap-1 text-xs font-bold text-neutral-900">
+                          {renderDeviceIcon(row.device.deviceType)}
+                          <span>{row.device.deviceType}</span>
+                        </div>
+                        <div className="text-[11px] text-neutral-600">
+                          {row.device.os} • {row.device.browser}
+                        </div>
+                        {row.device.userAgent &&
+                          row.device.userAgent !== 'Unknown' && (
+                            <div
+                              className="text-[10px] font-mono text-neutral-400 truncate max-w-[220px]"
+                              title={row.device.userAgent}
+                            >
+                              {row.device.userAgent}
+                            </div>
+                          )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {row.loc ? (
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            icon={<MapPin className="w-3 h-3" />}
+                            onClick={() => {
+                              setHistoryEmployee(null);
+                              void handleInspectOnGoogleMaps(
+                                rec,
+                                row.loc!,
+                                row.action
+                              );
+                            }}
+                          >
+                            Map
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-neutral-400">—</span>
+                        )}
                       </td>
                     </tr>
                   ));

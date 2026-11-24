@@ -11,6 +11,8 @@ import { FirestoreEngine } from '../../core/firebase/firebaseConfig';
 import { PolicyEngine, formatTime12Hour } from './policyEngine';
 import {
   evaluateAttendanceLocation,
+  detectAttendanceDevice,
+  normalizeLocationStatus,
   isSecureGeolocationContext,
 } from './locationEngine';
 import type {
@@ -19,20 +21,12 @@ import type {
   ShowupPolicyConfig,
   ShowupLeaveBalance,
   AttendanceGeoLocation,
-  AttendanceLocationStatus,
+  NormalizedLocationStatus,
+  AttendanceDeviceInfo,
   OfficeLocationConfig,
 } from '../../core/types';
 
 const GEO_PERMISSION_STORAGE_KEY = 'gs_hrms_geo_permission_state_v1';
-
-function detectDeviceType(): 'Desktop / Laptop' | 'Mobile / Tablet' {
-  if (typeof navigator === 'undefined') return 'Desktop / Laptop';
-  const ua = navigator.userAgent || '';
-  if (/Mobi|Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(ua)) {
-    return 'Mobile / Tablet';
-  }
-  return 'Desktop / Laptop';
-}
 
 export const PunchWidget: React.FC<{
   currentEmployee: Employee;
@@ -154,7 +148,8 @@ export const PunchWidget: React.FC<{
    */
   const captureDeviceLocation = (
     punchType: 'IN' | 'OUT',
-    isoTimestamp: string
+    isoTimestamp: string,
+    deviceInfo: AttendanceDeviceInfo
   ): Promise<AttendanceGeoLocation> => {
     return new Promise((resolve, reject) => {
       if (!isSecureGeolocationContext()) {
@@ -188,7 +183,8 @@ export const PunchWidget: React.FC<{
           date: todayStr,
           timestamp: isoTimestamp,
           punchType,
-          deviceType: detectDeviceType(),
+          deviceType: deviceInfo.deviceType,
+          deviceInfo,
         });
       };
 
@@ -260,11 +256,16 @@ export const PunchWidget: React.FC<{
     setIsCapturingGps(true);
 
     const serverTimestamp = new Date().toISOString();
+    const checkInDevice = detectAttendanceDevice();
     let capturedGps: AttendanceGeoLocation | undefined;
     let locationUnavailableReason: string | undefined;
 
     try {
-      capturedGps = await captureDeviceLocation('IN', serverTimestamp);
+      capturedGps = await captureDeviceLocation(
+        'IN',
+        serverTimestamp,
+        checkInDevice
+      );
     } catch (err: any) {
       const reason =
         err?.message ||
@@ -275,12 +276,14 @@ export const PunchWidget: React.FC<{
 
     try {
       const locEval = evaluateAttendanceLocation(capturedGps, officeLocation);
-      const locationStatus: AttendanceLocationStatus = locEval.locationStatus;
+      const locationStatus: NormalizedLocationStatus = locEval.locationStatus;
       const enrichedGps: AttendanceGeoLocation | undefined = capturedGps
         ? {
             ...capturedGps,
             locationStatus,
             distanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+            deviceType: checkInDevice.deviceType,
+            deviceInfo: checkInDevice,
           }
         : undefined;
 
@@ -300,12 +303,17 @@ export const PunchWidget: React.FC<{
           type: 'IN' as const,
           timestamp: serverTimestamp,
           locationNote: locationStatus,
+          locationStatus,
+          distanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+          deviceInfo: checkInDevice,
           ...(enrichedGps ? { gpsLocation: enrichedGps } : {}),
         },
       ];
 
       const recordId = `${currentEmployee.id}_${todayStr}`;
+      // Preserve original Check-In details if already recorded earlier today
       const newRecord: ShowupAttendanceRecord = {
+        ...todayRecord,
         id: recordId,
         employeeId: currentEmployee.id,
         employeeName: currentEmployee.name,
@@ -314,14 +322,37 @@ export const PunchWidget: React.FC<{
         date: todayStr,
         status: isLate ? 'Late' : 'Present',
         punches: nextPunches,
+        checkInTimestamp: todayRecord?.checkInTimestamp || serverTimestamp,
         checkInLocation: todayRecord?.checkInLocation || enrichedGps,
+        checkInLocationStatus:
+          todayRecord?.checkInLocationStatus || locationStatus,
+        checkInDistanceFromOfficeMeters:
+          todayRecord?.checkInDistanceFromOfficeMeters ??
+          locEval.distanceFromOfficeMeters,
+        checkInLocationUnavailableReason:
+          todayRecord?.checkInLocationUnavailableReason ||
+          locationUnavailableReason,
+        checkInDevice: todayRecord?.checkInDevice || checkInDevice,
+        checkOutTimestamp: todayRecord?.checkOutTimestamp,
         checkOutLocation: todayRecord?.checkOutLocation,
-        locationStatus: todayRecord?.locationStatus || locationStatus,
+        checkOutLocationStatus: todayRecord?.checkOutLocationStatus,
+        checkOutDistanceFromOfficeMeters:
+          todayRecord?.checkOutDistanceFromOfficeMeters,
+        checkOutLocationUnavailableReason:
+          todayRecord?.checkOutLocationUnavailableReason,
+        checkOutDevice: todayRecord?.checkOutDevice,
+        locationStatus:
+          todayRecord?.checkInLocationStatus ||
+          todayRecord?.locationStatus ||
+          locationStatus,
         distanceFromOfficeMeters:
+          todayRecord?.checkInDistanceFromOfficeMeters ??
           todayRecord?.distanceFromOfficeMeters ??
           locEval.distanceFromOfficeMeters,
         locationUnavailableReason:
-          todayRecord?.locationUnavailableReason || locationUnavailableReason,
+          todayRecord?.checkInLocationUnavailableReason ||
+          todayRecord?.locationUnavailableReason ||
+          locationUnavailableReason,
         breakMinutes,
         totalHours: todayRecord?.totalHours || 0,
         isLate,
@@ -443,24 +474,35 @@ export const PunchWidget: React.FC<{
     setIsCapturingGps(true);
 
     const serverTimestamp = new Date().toISOString();
+    const checkOutDevice = detectAttendanceDevice();
     let capturedGps: AttendanceGeoLocation | undefined;
+    let checkOutUnavailableReason: string | undefined;
 
     try {
-      capturedGps = await captureDeviceLocation('OUT', serverTimestamp);
+      capturedGps = await captureDeviceLocation(
+        'OUT',
+        serverTimestamp,
+        checkOutDevice
+      );
     } catch (err: any) {
       const msg =
         err?.message ||
         'Location permission denied or unavailable during Check-Out.';
+      checkOutUnavailableReason = msg;
       setGpsError(msg);
     }
 
     try {
       const locEval = evaluateAttendanceLocation(capturedGps, officeLocation);
+      const checkOutLocationStatus: NormalizedLocationStatus =
+        locEval.locationStatus;
       const enrichedGps: AttendanceGeoLocation | undefined = capturedGps
         ? {
             ...capturedGps,
-            locationStatus: locEval.locationStatus,
+            locationStatus: checkOutLocationStatus,
             distanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+            deviceType: checkOutDevice.deviceType,
+            deviceInfo: checkOutDevice,
           }
         : undefined;
 
@@ -469,7 +511,10 @@ export const PunchWidget: React.FC<{
         {
           type: 'OUT' as const,
           timestamp: serverTimestamp,
-          locationNote: locEval.locationStatus,
+          locationNote: checkOutLocationStatus,
+          locationStatus: checkOutLocationStatus,
+          distanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+          deviceInfo: checkOutDevice,
           ...(enrichedGps ? { gpsLocation: enrichedGps } : {}),
         },
       ];
@@ -497,6 +542,7 @@ export const PunchWidget: React.FC<{
         policy
       );
 
+      // Independently record Check-Out location & device WITHOUT overwriting Check-In details
       const updated: ShowupAttendanceRecord = {
         ...todayRecord,
         employeeId: currentEmployee.id,
@@ -504,8 +550,12 @@ export const PunchWidget: React.FC<{
         employeeEcode: currentEmployee.ecode,
         department: currentEmployee.department,
         punches: nextPunches,
-        checkOutLocation: enrichedGps || todayRecord.checkOutLocation,
-        locationStatus: todayRecord.locationStatus || locEval.locationStatus,
+        checkOutTimestamp: serverTimestamp,
+        checkOutLocation: enrichedGps,
+        checkOutLocationStatus,
+        checkOutDistanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+        checkOutLocationUnavailableReason: checkOutUnavailableReason,
+        checkOutDevice,
         breakMinutes,
         totalHours: computedHours,
         status: evaluation.status,
@@ -522,7 +572,7 @@ export const PunchWidget: React.FC<{
         'Checked Out Successfully',
         `Logged ${computedHours} hrs • Status: ${
           evaluation.status === 'Absent' ? 'Under-reported' : evaluation.status
-        } • Check-Out Location: ${locEval.locationStatus}`
+        } • Check-Out: ${checkOutLocationStatus} (${checkOutDevice.deviceType})`
       );
     } finally {
       setIsCapturingGps(false);
@@ -697,32 +747,69 @@ export const PunchWidget: React.FC<{
           </div>
 
           {todayRecord && (
-            <div className="flex items-center justify-between text-xs px-1">
-              <span className="text-neutral-500">Check-In Location Status:</span>
-              {(() => {
-                const locStatus =
-                  todayRecord.locationStatus ||
-                  todayRecord.checkInLocation?.locationStatus ||
-                  (todayRecord.checkInLocation
-                    ? evaluateAttendanceLocation(
-                        todayRecord.checkInLocation,
-                        officeLocation
-                      ).locationStatus
-                    : 'Location Unavailable');
-                return (
-                  <Badge
-                    variant={
-                      locStatus === 'Office'
-                        ? 'success'
-                        : locStatus === 'Outside Office'
-                        ? 'warning'
-                        : 'danger'
-                    }
-                  >
-                    {locStatus}
-                  </Badge>
-                );
-              })()}
+            <div className="space-y-1.5 pt-1 border-t border-neutral-100">
+              <div className="flex items-center justify-between text-xs px-1">
+                <span className="text-neutral-500">Check-In Location:</span>
+                {(() => {
+                  const locStatus = normalizeLocationStatus(
+                    todayRecord.checkInLocationStatus ||
+                      todayRecord.locationStatus ||
+                      todayRecord.checkInLocation?.locationStatus ||
+                      (todayRecord.checkInLocation
+                        ? evaluateAttendanceLocation(
+                            todayRecord.checkInLocation,
+                            officeLocation
+                          ).locationStatus
+                        : 'Location Unavailable')
+                  );
+                  return (
+                    <Badge
+                      variant={
+                        locStatus === 'In Office'
+                          ? 'success'
+                          : locStatus === 'Outside Office'
+                          ? 'warning'
+                          : 'danger'
+                      }
+                    >
+                      {locStatus}
+                    </Badge>
+                  );
+                })()}
+              </div>
+
+              {(todayRecord.checkOutTimestamp ||
+                todayRecord.checkOutLocation ||
+                todayRecord.punches?.some((p) => p.type === 'OUT')) && (
+                <div className="flex items-center justify-between text-xs px-1">
+                  <span className="text-neutral-500">Check-Out Location:</span>
+                  {(() => {
+                    const outStatus = normalizeLocationStatus(
+                      todayRecord.checkOutLocationStatus ||
+                        todayRecord.checkOutLocation?.locationStatus ||
+                        (todayRecord.checkOutLocation
+                          ? evaluateAttendanceLocation(
+                              todayRecord.checkOutLocation,
+                              officeLocation
+                            ).locationStatus
+                          : 'Location Unavailable')
+                    );
+                    return (
+                      <Badge
+                        variant={
+                          outStatus === 'In Office'
+                            ? 'success'
+                            : outStatus === 'Outside Office'
+                            ? 'warning'
+                            : 'danger'
+                        }
+                      >
+                        {outStatus}
+                      </Badge>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           )}
         </div>

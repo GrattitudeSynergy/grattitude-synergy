@@ -330,9 +330,28 @@ export type AttendanceStatus =
   | 'Weekly Off';
 
 export type AttendanceLocationStatus =
-  | 'Office'
+  | 'In Office'
+  | 'Outside Office'
+  | 'Location Unavailable'
+  | 'Office'; // Legacy value normalized to 'In Office'
+
+export type NormalizedLocationStatus =
+  | 'In Office'
   | 'Outside Office'
   | 'Location Unavailable';
+
+export type AttendanceDeviceType =
+  | 'Mobile Phone'
+  | 'Tablet'
+  | 'Laptop/Desktop'
+  | 'Unknown';
+
+export interface AttendanceDeviceInfo {
+  deviceType: AttendanceDeviceType;
+  os: string;
+  browser: string;
+  userAgent: string;
+}
 
 export interface OfficeLocationConfig {
   id: string; // 'office_location'
@@ -352,7 +371,8 @@ export interface AttendanceGeoLocation {
   date: string; // YYYY-MM-DD
   timestamp: string; // ISO 8601 timestamp
   punchType: 'IN' | 'OUT';
-  deviceType?: 'Desktop / Laptop' | 'Mobile / Tablet';
+  deviceType?: AttendanceDeviceType | 'Desktop / Laptop' | 'Mobile / Tablet';
+  deviceInfo?: AttendanceDeviceInfo;
   locationStatus?: AttendanceLocationStatus;
   distanceFromOfficeMeters?: number;
 }
@@ -370,9 +390,25 @@ export interface ShowupAttendanceRecord {
     timestamp: string;
     locationNote?: string;
     gpsLocation?: AttendanceGeoLocation;
+    deviceInfo?: AttendanceDeviceInfo;
+    locationStatus?: NormalizedLocationStatus;
+    distanceFromOfficeMeters?: number;
   }>;
+  // Independent Check-In location & device details
+  checkInTimestamp?: string;
   checkInLocation?: AttendanceGeoLocation;
+  checkInLocationStatus?: NormalizedLocationStatus;
+  checkInDistanceFromOfficeMeters?: number;
+  checkInLocationUnavailableReason?: string;
+  checkInDevice?: AttendanceDeviceInfo;
+  // Independent Check-Out location & device details
+  checkOutTimestamp?: string;
   checkOutLocation?: AttendanceGeoLocation;
+  checkOutLocationStatus?: NormalizedLocationStatus;
+  checkOutDistanceFromOfficeMeters?: number;
+  checkOutLocationUnavailableReason?: string;
+  checkOutDevice?: AttendanceDeviceInfo;
+  // Legacy / summary aliases (reflects Check-In for backwards compatibility)
   locationStatus?: AttendanceLocationStatus;
   distanceFromOfficeMeters?: number;
   locationUnavailableReason?: string;
