@@ -809,7 +809,7 @@ export const ShowUpModule: React.FC<{
       ? [
           {
             id: 'gps-admin',
-            label: 'Admin GPS Location Tracker',
+            label: 'Office Location & Attendance GPS',
             icon: <MapPin className="w-3.5 h-3.5" />,
           },
           {

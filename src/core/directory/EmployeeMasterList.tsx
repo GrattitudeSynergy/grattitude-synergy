@@ -193,7 +193,7 @@ export const EmployeeMasterList: React.FC<{
       ? [
           {
             id: 'gps-tracker',
-            label: 'Attendance GPS Tracker',
+            label: 'Office & Attendance Location',
             icon: <MapPin className="w-3.5 h-3.5" />,
           },
         ]

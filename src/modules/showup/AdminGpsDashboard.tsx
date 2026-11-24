@@ -12,6 +12,11 @@ import {
   CheckCircle2,
   Eye,
   FileText,
+  Building2,
+  Crosshair,
+  Save,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   Card,
@@ -22,12 +27,21 @@ import {
   EmptyState,
   useToast,
 } from '../../core/components/DesignSystem';
+import { FirestoreEngine } from '../../core/firebase/firebaseConfig';
 import { PermissionsService } from '../../core/services/permissionsService';
 import { AuditService } from '../../core/services/auditService';
+import {
+  DEFAULT_OFFICE_RADIUS_METERS,
+  evaluateAttendanceLocation,
+  formatDistanceLabel,
+  isSecureGeolocationContext,
+} from './locationEngine';
 import type {
   Employee,
   ShowupAttendanceRecord,
   AttendanceGeoLocation,
+  AttendanceLocationStatus,
+  OfficeLocationConfig,
   AuditLogEntry,
 } from '../../core/types';
 
@@ -50,13 +64,57 @@ export const AdminGpsDashboard: React.FC<{
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmpId, setSelectedEmpId] = useState<string>('ALL');
+  const [selectedDept, setSelectedDept] = useState<string>('ALL');
+  const [selectedLocationStatus, setSelectedLocationStatus] = useState<
+    'ALL' | AttendanceLocationStatus
+  >('ALL');
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [selectedMapTarget, setSelectedMapTarget] =
     useState<SelectedMapTarget | null>(null);
   const [historyEmployee, setHistoryEmployee] = useState<Employee | null>(null);
   const [locationAuditLogs, setLocationAuditLogs] = useState<AuditLogEntry[]>([]);
 
+  // Official Office Location Configuration State (stored in app_settings/office_location)
+  const [officeLocation, setOfficeLocation] =
+    useState<OfficeLocationConfig | null>(null);
+  const [officeNameInput, setOfficeNameInput] = useState('Grattitude Synergy HQ');
+  const [officeLatInput, setOfficeLatInput] = useState<string>('');
+  const [officeLngInput, setOfficeLngInput] = useState<string>('');
+  const [officeRadiusInput, setOfficeRadiusInput] = useState<number>(
+    DEFAULT_OFFICE_RADIUS_METERS
+  );
+  const [officeAccuracy, setOfficeAccuracy] = useState<number | undefined>(
+    undefined
+  );
+  const [isDetectingOfficeGps, setIsDetectingOfficeGps] = useState(false);
+  const [isSavingOffice, setIsSavingOffice] = useState(false);
+  const [officeGpsError, setOfficeGpsError] = useState<string | null>(null);
+
   const loggedDashboardMount = useRef(false);
+
+  // Subscribe to saved official office location from central database
+  useEffect(() => {
+    if (!isStrictAdmin) return;
+    const unsubOffice = FirestoreEngine.subscribeCollection<any>(
+      'app_settings',
+      (items) => {
+        const found: OfficeLocationConfig | undefined = items.find(
+          (i) => i.id === 'office_location'
+        );
+        if (found) {
+          setOfficeLocation(found);
+          setOfficeNameInput(found.officeName || 'Grattitude Synergy HQ');
+          setOfficeLatInput(String(found.latitude));
+          setOfficeLngInput(String(found.longitude));
+          setOfficeRadiusInput(
+            found.radiusMeters || DEFAULT_OFFICE_RADIUS_METERS
+          );
+          setOfficeAccuracy(found.accuracy);
+        }
+      }
+    );
+    return () => unsubOffice();
+  }, [isStrictAdmin]);
 
   // Log Admin access to the GPS Location Dashboard on open & subscribe to location audit logs
   useEffect(() => {
@@ -69,7 +127,7 @@ export const AdminGpsDashboard: React.FC<{
         actor: currentEmployee,
         targetId: 'showup_attendance_gps',
         targetType: 'AttendanceGpsDashboard',
-        details: `Admin ${currentEmployee.name} (${currentEmployee.ecode}) opened the Employee Attendance GPS Location Tracking Dashboard.`,
+        details: `Admin ${currentEmployee.name} (${currentEmployee.ecode}) opened the Office Location & Attendance Location Dashboard.`,
       });
     }
 
@@ -77,8 +135,10 @@ export const AdminGpsDashboard: React.FC<{
       const gpsLogs = logs.filter(
         (l) =>
           l.action.startsWith('ADMIN_GPS_') ||
+          l.action.startsWith('ADMIN_OFFICE_LOCATION') ||
           l.targetType === 'AttendanceGpsLocation' ||
-          l.targetType === 'AttendanceGpsDashboard'
+          l.targetType === 'AttendanceGpsDashboard' ||
+          l.targetType === 'OfficeLocationConfig'
       );
       setLocationAuditLogs(gpsLogs);
     });
@@ -147,6 +207,159 @@ export const AdminGpsDashboard: React.FC<{
     return { checkIn, checkOut, allGpsPunches: gpsPunches };
   };
 
+  const handleUseCurrentLocationForOffice = () => {
+    setOfficeGpsError(null);
+    if (!isSecureGeolocationContext()) {
+      const msg =
+        'Browser geolocation requires HTTPS (or localhost). Please open the portal over HTTPS to capture your current office coordinates.';
+      setOfficeGpsError(msg);
+      showToast('error', 'HTTPS Required for GPS', msg);
+      return;
+    }
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      const msg = 'Geolocation is not supported by this browser.';
+      setOfficeGpsError(msg);
+      showToast('error', 'Geolocation Unsupported', msg);
+      return;
+    }
+
+    setIsDetectingOfficeGps(true);
+    const onSuccess = (pos: GeolocationPosition) => {
+      setOfficeLatInput(pos.coords.latitude.toFixed(6));
+      setOfficeLngInput(pos.coords.longitude.toFixed(6));
+      setOfficeAccuracy(Math.round(pos.coords.accuracy || 0));
+      setIsDetectingOfficeGps(false);
+      showToast(
+        'success',
+        'Current Location Captured',
+        `Captured ${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)} (±${Math.round(pos.coords.accuracy || 0)}m). Click "Save Office Location" to apply.`
+      );
+    };
+    const onFinalError = (err: GeolocationPositionError) => {
+      setIsDetectingOfficeGps(false);
+      const msg =
+        err.code === err.PERMISSION_DENIED
+          ? 'Location permission denied. Please allow Location access in your browser address bar and try again.'
+          : 'Unable to detect current GPS location. Ensure device Location Services are turned ON.';
+      setOfficeGpsError(msg);
+      showToast('error', 'Could Not Detect Location', msg);
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      onSuccess,
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          onFinalError(err);
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(onSuccess, onFinalError, {
+          enableHighAccuracy: false,
+          timeout: 12000,
+          maximumAge: 30000,
+        });
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  };
+
+  const handleSaveOfficeLocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const lat = Number(officeLatInput);
+    const lng = Number(officeLngInput);
+    const radius = Number(officeRadiusInput);
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      showToast(
+        'error',
+        'Invalid Coordinates',
+        'Please capture your current location or enter valid latitude (-90 to 90) and longitude (-180 to 180).'
+      );
+      return;
+    }
+    if (!Number.isFinite(radius) || radius < 10 || radius > 50000) {
+      showToast(
+        'error',
+        'Invalid Office Radius',
+        'Please enter a GPS radius between 10 meters and 50,000 meters.'
+      );
+      return;
+    }
+
+    setIsSavingOffice(true);
+    try {
+      const cfg: OfficeLocationConfig = {
+        id: 'office_location',
+        officeName: officeNameInput.trim() || 'Grattitude Synergy HQ',
+        latitude: lat,
+        longitude: lng,
+        radiusMeters: Math.round(radius),
+        accuracy: officeAccuracy,
+        updatedBy: currentEmployee.name,
+        updatedAt: new Date().toISOString(),
+      };
+      await FirestoreEngine.setDocument('app_settings', 'office_location', cfg);
+      setOfficeLocation(cfg);
+      await AuditService.log({
+        action: 'ADMIN_OFFICE_LOCATION_UPDATED',
+        actor: currentEmployee,
+        targetId: 'office_location',
+        targetType: 'OfficeLocationConfig',
+        details: `Admin ${currentEmployee.name} saved official office location "${cfg.officeName}" at [${lat.toFixed(6)}, ${lng.toFixed(6)}] with ${cfg.radiusMeters}m GPS radius.`,
+      });
+      showToast(
+        'success',
+        'Official Office Location Saved',
+        `${cfg.officeName} configured with ${cfg.radiusMeters}m GPS radius.`
+      );
+    } finally {
+      setIsSavingOffice(false);
+    }
+  };
+
+  /**
+   * Resolves the effective location status and distance for any attendance record,
+   * supporting both newly recorded records (with explicit locationStatus) and legacy GPS records.
+   */
+  const resolveRecordLocationStatus = (
+    rec: ShowupAttendanceRecord,
+    checkIn?: AttendanceGeoLocation
+  ): {
+    status: AttendanceLocationStatus;
+    distanceMeters?: number;
+  } => {
+    if (checkIn) {
+      const liveEval = officeLocation
+        ? evaluateAttendanceLocation(checkIn, officeLocation)
+        : null;
+      return {
+        status:
+          rec.locationStatus ||
+          checkIn.locationStatus ||
+          liveEval?.locationStatus ||
+          'Outside Office',
+        distanceMeters:
+          rec.distanceFromOfficeMeters ??
+          checkIn.distanceFromOfficeMeters ??
+          liveEval?.distanceFromOfficeMeters,
+      };
+    }
+    return {
+      status: rec.locationStatus || 'Location Unavailable',
+      distanceMeters: undefined,
+    };
+  };
+
+  const departments = Array.from(
+    new Set(employees.map((e) => e.department).filter(Boolean))
+  ).sort();
+
   // Sort records newest date/timestamp first
   const sortedRecords = [...attendanceRecords].sort((a, b) =>
     b.date.localeCompare(a.date)
@@ -154,10 +367,22 @@ export const AdminGpsDashboard: React.FC<{
 
   const filteredRecords = sortedRecords.filter((rec) => {
     const meta = getEmployeeMeta(rec.employeeId, rec.employeeName);
+    const { checkIn } = resolveRecordLocations(rec);
+    const locMeta = resolveRecordLocationStatus(rec, checkIn);
+
     if (selectedEmpId !== 'ALL') {
       const selNorm = PermissionsService.normalizeEmpId(selectedEmpId);
       const recNorm = PermissionsService.normalizeEmpId(rec.employeeId);
       if (selNorm !== recNorm) return false;
+    }
+    if (selectedDept !== 'ALL' && meta.department !== selectedDept) {
+      return false;
+    }
+    if (
+      selectedLocationStatus !== 'ALL' &&
+      locMeta.status !== selectedLocationStatus
+    ) {
+      return false;
     }
     if (selectedDate && rec.date !== selectedDate) {
       return false;
@@ -168,28 +393,28 @@ export const AdminGpsDashboard: React.FC<{
         meta.name.toLowerCase().includes(q) ||
         meta.ecode.toLowerCase().includes(q) ||
         meta.department.toLowerCase().includes(q) ||
-        rec.date.includes(q);
+        rec.date.includes(q) ||
+        locMeta.status.toLowerCase().includes(q);
       if (!match) return false;
     }
     return true;
   });
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const todayGpsCheckIns = attendanceRecords.filter((r) => {
-    if (r.date !== todayStr) return false;
+  const todayRecords = attendanceRecords.filter((r) => r.date === todayStr);
+  const todayOfficeCount = todayRecords.filter((r) => {
     const { checkIn } = resolveRecordLocations(r);
-    return Boolean(checkIn);
+    return resolveRecordLocationStatus(r, checkIn).status === 'Office';
   }).length;
-
-  const todayGpsCheckOuts = attendanceRecords.filter((r) => {
-    if (r.date !== todayStr) return false;
-    const { checkOut } = resolveRecordLocations(r);
-    return Boolean(checkOut);
+  const todayOutsideCount = todayRecords.filter((r) => {
+    const { checkIn } = resolveRecordLocations(r);
+    return resolveRecordLocationStatus(r, checkIn).status === 'Outside Office';
   }).length;
-
-  const totalGpsRecordsCount = attendanceRecords.filter((r) => {
-    const { checkIn, checkOut, allGpsPunches } = resolveRecordLocations(r);
-    return Boolean(checkIn || checkOut || allGpsPunches.length > 0);
+  const todayUnavailableCount = todayRecords.filter((r) => {
+    const { checkIn } = resolveRecordLocations(r);
+    return (
+      resolveRecordLocationStatus(r, checkIn).status === 'Location Unavailable'
+    );
   }).length;
 
   const handleInspectOnGoogleMaps = async (
@@ -243,54 +468,225 @@ export const AdminGpsDashboard: React.FC<{
 
   return (
     <div className="space-y-5">
+      {/* Official Office Location Configuration Card (Admin Only) */}
+      <Card
+        title={
+          <div className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-sky-600" />
+            <span>Official Office Location &amp; Geofence Radius (Admin Control)</span>
+          </div>
+        }
+        subtitle="Configure the company's official GPS office location and geofence radius. Employee check-ins within this radius are marked 'Office'; outside are marked 'Outside Office'."
+        action={
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={isDetectingOfficeGps}
+            icon={
+              isDetectingOfficeGps ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Crosshair className="w-3.5 h-3.5" />
+              )
+            }
+            onClick={handleUseCurrentLocationForOffice}
+          >
+            {isDetectingOfficeGps
+              ? 'Detecting Current Location...'
+              : 'Use My Current Location'}
+          </Button>
+        }
+      >
+        {officeGpsError && (
+          <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-800">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+            <span>{officeGpsError}</span>
+          </div>
+        )}
+
+        {officeLocation ? (
+          <div className="mb-4 p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="space-y-0.5">
+              <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>Saved Office Location: {officeLocation.officeName}</span>
+              </div>
+              <div className="font-mono text-emerald-800">
+                Lat: <strong>{officeLocation.latitude.toFixed(6)}</strong> • Lng:{' '}
+                <strong>{officeLocation.longitude.toFixed(6)}</strong> • Radius:{' '}
+                <strong>{officeLocation.radiusMeters} m</strong>
+                {officeLocation.accuracy ? ` • GPS Accuracy: ±${officeLocation.accuracy}m` : ''}
+              </div>
+              <div className="text-[11px] text-emerald-700">
+                Last updated by {officeLocation.updatedBy} on{' '}
+                {new Date(officeLocation.updatedAt).toLocaleString()}
+              </div>
+            </div>
+            <a
+              href={`https://www.google.com/maps?q=${officeLocation.latitude},${officeLocation.longitude}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>View Office on Google Maps</span>
+            </a>
+          </div>
+        ) : (
+          <div className="mb-4 p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <strong>Office Location Not Configured Yet:</strong> Click{' '}
+              <strong>"Use My Current Location"</strong> above (or enter coordinates below) and save to enable automatic <strong>Office</strong> vs <strong>Outside Office</strong> detection on employee check-ins.
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={handleSaveOfficeLocation} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                Office Location Name *
+              </label>
+              <input
+                type="text"
+                required
+                value={officeNameInput}
+                onChange={(e) => setOfficeNameInput(e.target.value)}
+                placeholder="e.g. Grattitude Synergy HQ"
+                className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                Office Latitude *
+              </label>
+              <input
+                type="number"
+                step="any"
+                required
+                value={officeLatInput}
+                onChange={(e) => setOfficeLatInput(e.target.value)}
+                placeholder="Click 'Use My Current Location'"
+                className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                Office Longitude *
+              </label>
+              <input
+                type="number"
+                step="any"
+                required
+                value={officeLngInput}
+                onChange={(e) => setOfficeLngInput(e.target.value)}
+                placeholder="Click 'Use My Current Location'"
+                className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                GPS Office Radius (Meters) *
+              </label>
+              <input
+                type="number"
+                min={10}
+                max={50000}
+                required
+                value={officeRadiusInput}
+                onChange={(e) => setOfficeRadiusInput(Number(e.target.value))}
+                className="w-full px-3 py-2 text-xs font-mono font-bold border border-neutral-300 rounded-lg"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-600">
+              <span className="font-bold">Quick Radius Presets:</span>
+              {[50, 100, 150, 250, 500].map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setOfficeRadiusInput(r)}
+                  className={`px-2.5 py-1 rounded-md border font-mono font-bold cursor-pointer ${
+                    officeRadiusInput === r
+                      ? 'bg-neutral-900 text-white border-neutral-900'
+                      : 'bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-100'
+                  }`}
+                >
+                  {r}m
+                </button>
+              ))}
+            </div>
+
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={isSavingOffice}
+              icon={<Save className="w-3.5 h-3.5" />}
+            >
+              {isSavingOffice ? 'Saving...' : 'Save Office Location'}
+            </Button>
+          </div>
+        </form>
+      </Card>
+
       {/* Summary KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3.5">
         <div className="p-4 bg-white border border-neutral-200 rounded-xl">
           <div className="text-[11px] font-bold uppercase text-neutral-500">
-            Today's GPS Check-Ins
+            Checked In from Office (Today)
           </div>
           <div className="text-2xl font-extrabold text-emerald-700 mt-1">
-            {todayGpsCheckIns}
+            {todayOfficeCount}
           </div>
           <div className="text-[11px] text-neutral-400 mt-0.5">
-            Verified coordinates ({todayStr})
+            Within office geofence ({todayStr})
           </div>
         </div>
 
         <div className="p-4 bg-white border border-neutral-200 rounded-xl">
           <div className="text-[11px] font-bold uppercase text-neutral-500">
-            Today's GPS Check-Outs
+            Outside Office (Today)
           </div>
-          <div className="text-2xl font-extrabold text-sky-700 mt-1">
-            {todayGpsCheckOuts}
+          <div className="text-2xl font-extrabold text-amber-700 mt-1">
+            {todayOutsideCount}
           </div>
           <div className="text-[11px] text-neutral-400 mt-0.5">
-            Completed shifts with GPS
+            Checked in beyond office radius
           </div>
         </div>
 
         <div className="p-4 bg-white border border-neutral-200 rounded-xl">
           <div className="text-[11px] font-bold uppercase text-neutral-500">
-            Total GPS Attendance Logs
+            Location Unavailable (Today)
           </div>
-          <div className="text-2xl font-extrabold text-neutral-900 mt-1">
-            {totalGpsRecordsCount}
+          <div className="text-2xl font-extrabold text-rose-700 mt-1">
+            {todayUnavailableCount}
           </div>
           <div className="text-[11px] text-neutral-400 mt-0.5">
-            Synchronized across devices
+            GPS permission denied or unavailable
           </div>
         </div>
 
         <div className="p-4 bg-white border border-neutral-200 rounded-xl">
           <div className="text-[11px] font-bold uppercase text-neutral-500">
-            Location Privacy &amp; RLS
+            Location Privacy &amp; Radius
           </div>
-          <div className="text-sm font-extrabold text-emerald-700 mt-1.5 flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4" />
-            <span>Admin-Only Enforced</span>
+          <div className="text-sm font-extrabold text-sky-700 mt-1.5 flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <span>
+              {officeLocation ? `${officeLocation.radiusMeters}m Radius Active` : 'Radius Not Set'}
+            </span>
           </div>
           <div className="text-[11px] text-neutral-400 mt-1">
-            Hidden from Employees &amp; Managers
+            Detailed GPS visible to Admin only
           </div>
         </div>
       </div>
@@ -301,21 +697,21 @@ export const AdminGpsDashboard: React.FC<{
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-sky-600" />
             <span>
-              Admin Attendance GPS Location Tracker &amp; Google Maps Inspector
+              Employee Attendance Location Status &amp; GPS Inspector
             </span>
           </div>
         }
-        subtitle="Strict Admin-Only View: Inspect Check-In and Check-Out GPS coordinates, accuracy, timestamps, and Google Maps history. Every location inspection is recorded in the Audit Log."
+        subtitle="Strict Admin-Only View: Filter by date, employee, department, or location status (Office, Outside Office, Location Unavailable). Detailed GPS coordinates are restricted to Admin."
       >
         {/* Filter Controls */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search employee name, E-Code, or department..."
+              placeholder="Search name or E-Code..."
               className="w-full pl-8 pr-3 py-2 text-xs border border-neutral-300 rounded-lg"
             />
           </div>
@@ -329,9 +725,37 @@ export const AdminGpsDashboard: React.FC<{
               <option value="ALL">All Employees ({employees.length})</option>
               {employees.map((emp) => (
                 <option key={emp.id} value={emp.id}>
-                  {emp.name} ({emp.ecode}) — {emp.department}
+                  {emp.name} ({emp.ecode})
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={selectedDept}
+              onChange={(e) => setSelectedDept(e.target.value)}
+              className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
+            >
+              <option value="ALL">All Departments</option>
+              {departments.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={selectedLocationStatus}
+              onChange={(e) => setSelectedLocationStatus(e.target.value as any)}
+              className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
+            >
+              <option value="ALL">All Location Statuses</option>
+              <option value="Office">Office</option>
+              <option value="Outside Office">Outside Office</option>
+              <option value="Location Unavailable">Location Unavailable</option>
             </select>
           </div>
 
@@ -351,7 +775,7 @@ export const AdminGpsDashboard: React.FC<{
                 size="sm"
                 onClick={() => setSelectedDate('')}
               >
-                All Dates
+                All
               </Button>
             )}
           </div>
@@ -360,15 +784,16 @@ export const AdminGpsDashboard: React.FC<{
         {filteredRecords.length === 0 ? (
           <EmptyState
             title="No Attendance Location Records Found"
-            description="When employees click Check In or Check Out, their device GPS coordinates, accuracy, and timestamps will automatically appear here for Admin review."
+            description="When employees check in or out via Show Up, their attendance location status (Office, Outside Office, or Location Unavailable), timestamps, and GPS details appear here."
           />
         ) : (
           <Table
             headers={[
               'Employee',
-              'Date & Status',
-              'Check-In GPS Location',
-              'Check-Out GPS Location',
+              'Date & Attendance',
+              'Location Status',
+              'Check-In Time & GPS',
+              'Check-Out Time & GPS',
               'Location History',
             ]}
           >
@@ -376,6 +801,8 @@ export const AdminGpsDashboard: React.FC<{
               const meta = getEmployeeMeta(rec.employeeId, rec.employeeName);
               const { checkIn, checkOut, allGpsPunches } =
                 resolveRecordLocations(rec);
+              const locMeta = resolveRecordLocationStatus(rec, checkIn);
+              const firstInPunch = rec.punches?.find((p) => p.type === 'IN');
 
               return (
                 <tr key={rec.id} className="hover:bg-neutral-50/80">
@@ -402,12 +829,32 @@ export const AdminGpsDashboard: React.FC<{
                             : 'danger'
                         }
                       >
-                        {rec.status}
+                        {rec.status === 'Absent' ? 'Under-reported' : rec.status}
                       </Badge>
                       <span className="text-[11px] font-mono text-neutral-500">
                         {rec.totalHours || 0}h
                       </span>
                     </div>
+                  </td>
+
+                  {/* Location Status Column */}
+                  <td className="px-4 py-3">
+                    <Badge
+                      variant={
+                        locMeta.status === 'Office'
+                          ? 'success'
+                          : locMeta.status === 'Outside Office'
+                          ? 'warning'
+                          : 'danger'
+                      }
+                    >
+                      {locMeta.status}
+                    </Badge>
+                    {locMeta.distanceMeters !== undefined && (
+                      <div className="text-[11px] font-mono text-neutral-500 mt-1">
+                        {formatDistanceLabel(locMeta.distanceMeters)}
+                      </div>
+                    )}
                   </td>
 
                   {/* Check-In GPS Column */}
@@ -460,9 +907,22 @@ export const AdminGpsDashboard: React.FC<{
                         </div>
                       </div>
                     ) : (
-                      <span className="text-xs text-neutral-400 italic">
-                        No GPS captured (Legacy record)
-                      </span>
+                      <div className="space-y-0.5">
+                        {firstInPunch && (
+                          <div className="text-[11px] text-neutral-700">
+                            Check-In Time:{' '}
+                            <strong>
+                              {new Date(
+                                firstInPunch.timestamp
+                              ).toLocaleTimeString()}
+                            </strong>
+                          </div>
+                        )}
+                        <span className="text-xs text-rose-600 italic block">
+                          {rec.locationUnavailableReason ||
+                            'GPS location unavailable / permission denied'}
+                        </span>
+                      </div>
                     )}
                   </td>
 

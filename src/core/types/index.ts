@@ -329,6 +329,22 @@ export type AttendanceStatus =
   | 'Holiday'
   | 'Weekly Off';
 
+export type AttendanceLocationStatus =
+  | 'Office'
+  | 'Outside Office'
+  | 'Location Unavailable';
+
+export interface OfficeLocationConfig {
+  id: string; // 'office_location'
+  officeName: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number; // Configurable geofence radius in meters
+  accuracy?: number;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export interface AttendanceGeoLocation {
   latitude: number;
   longitude: number;
@@ -337,6 +353,8 @@ export interface AttendanceGeoLocation {
   timestamp: string; // ISO 8601 timestamp
   punchType: 'IN' | 'OUT';
   deviceType?: 'Desktop / Laptop' | 'Mobile / Tablet';
+  locationStatus?: AttendanceLocationStatus;
+  distanceFromOfficeMeters?: number;
 }
 
 export interface ShowupAttendanceRecord {
@@ -355,6 +373,9 @@ export interface ShowupAttendanceRecord {
   }>;
   checkInLocation?: AttendanceGeoLocation;
   checkOutLocation?: AttendanceGeoLocation;
+  locationStatus?: AttendanceLocationStatus;
+  distanceFromOfficeMeters?: number;
+  locationUnavailableReason?: string;
   breakMinutes?: number;
   totalHours: number;
   isLate: boolean;

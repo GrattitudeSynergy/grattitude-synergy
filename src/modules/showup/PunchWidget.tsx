@@ -9,12 +9,18 @@ import {
 import { Card, Button, Badge, useToast } from '../../core/components/DesignSystem';
 import { FirestoreEngine } from '../../core/firebase/firebaseConfig';
 import { PolicyEngine, formatTime12Hour } from './policyEngine';
+import {
+  evaluateAttendanceLocation,
+  isSecureGeolocationContext,
+} from './locationEngine';
 import type {
   Employee,
   ShowupAttendanceRecord,
   ShowupPolicyConfig,
   ShowupLeaveBalance,
   AttendanceGeoLocation,
+  AttendanceLocationStatus,
+  OfficeLocationConfig,
 } from '../../core/types';
 
 const GEO_PERMISSION_STORAGE_KEY = 'gs_hrms_geo_permission_state_v1';
@@ -39,6 +45,8 @@ export const PunchWidget: React.FC<{
     todayRecord?.breakMinutes || 0
   );
   const [now, setNow] = useState<Date>(new Date());
+  const [officeLocation, setOfficeLocation] =
+    useState<OfficeLocationConfig | null>(null);
   const [isCapturingGps, setIsCapturingGps] = useState<boolean>(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [permissionState, setPermissionState] = useState<
@@ -56,6 +64,18 @@ export const PunchWidget: React.FC<{
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Subscribe to Admin-configured official office location from central database
+  useEffect(() => {
+    const unsub = FirestoreEngine.subscribeCollection<any>(
+      'app_settings',
+      (items) => {
+        const found = items.find((i) => i.id === 'office_location');
+        setOfficeLocation(found || null);
+      }
+    );
+    return () => unsub();
   }, []);
 
   // Silently inspect browser Geolocation permission status without triggering a prompt or background tracking
@@ -137,10 +157,18 @@ export const PunchWidget: React.FC<{
     isoTimestamp: string
   ): Promise<AttendanceGeoLocation> => {
     return new Promise((resolve, reject) => {
+      if (!isSecureGeolocationContext()) {
+        reject(
+          new Error(
+            'Geolocation requires a secure HTTPS connection. Your attendance will be marked as "Location Unavailable" until accessed over HTTPS.'
+          )
+        );
+        return;
+      }
       if (typeof navigator === 'undefined' || !navigator.geolocation) {
         reject(
           new Error(
-            'Geolocation is not supported by your browser. Please use a modern browser (Chrome, Edge, Safari, or Firefox) with Location Services enabled.'
+            'Geolocation is not supported by your browser. Attendance will be recorded as "Location Unavailable".'
           )
         );
         return;
@@ -232,21 +260,30 @@ export const PunchWidget: React.FC<{
     setIsCapturingGps(true);
 
     const serverTimestamp = new Date().toISOString();
-    let capturedGps: AttendanceGeoLocation;
+    let capturedGps: AttendanceGeoLocation | undefined;
+    let locationUnavailableReason: string | undefined;
 
     try {
       capturedGps = await captureDeviceLocation('IN', serverTimestamp);
     } catch (err: any) {
-      const msg =
+      const reason =
         err?.message ||
-        'Location permission denied or unavailable. Attendance Check-In was not submitted.';
-      setGpsError(msg);
-      setIsCapturingGps(false);
-      showToast('error', 'Check-In Blocked — Location Required', msg);
-      return;
+        'Location permission denied or unavailable. Check-In recorded with status "Location Unavailable".';
+      locationUnavailableReason = reason;
+      setGpsError(reason);
     }
 
     try {
+      const locEval = evaluateAttendanceLocation(capturedGps, officeLocation);
+      const locationStatus: AttendanceLocationStatus = locEval.locationStatus;
+      const enrichedGps: AttendanceGeoLocation | undefined = capturedGps
+        ? {
+            ...capturedGps,
+            locationStatus,
+            distanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+          }
+        : undefined;
+
       const isFirstPunch = punches.length === 0;
       const isLate = isFirstPunch
         ? PolicyEngine.isPunchInLate(
@@ -262,8 +299,8 @@ export const PunchWidget: React.FC<{
         {
           type: 'IN' as const,
           timestamp: serverTimestamp,
-          locationNote: 'Office HQ',
-          gpsLocation: capturedGps,
+          locationNote: locationStatus,
+          ...(enrichedGps ? { gpsLocation: enrichedGps } : {}),
         },
       ];
 
@@ -277,8 +314,14 @@ export const PunchWidget: React.FC<{
         date: todayStr,
         status: isLate ? 'Late' : 'Present',
         punches: nextPunches,
-        checkInLocation: todayRecord?.checkInLocation || capturedGps,
+        checkInLocation: todayRecord?.checkInLocation || enrichedGps,
         checkOutLocation: todayRecord?.checkOutLocation,
+        locationStatus: todayRecord?.locationStatus || locationStatus,
+        distanceFromOfficeMeters:
+          todayRecord?.distanceFromOfficeMeters ??
+          locEval.distanceFromOfficeMeters,
+        locationUnavailableReason:
+          todayRecord?.locationUnavailableReason || locationUnavailableReason,
         breakMinutes,
         totalHours: todayRecord?.totalHours || 0,
         isLate,
@@ -371,16 +414,22 @@ export const PunchWidget: React.FC<{
           'warning',
           isThirdLateMarkTriggered
             ? '3rd Late Mark Reached — 0.5 CSL Deducted'
-            : 'Checked In (Late Mark Recorded)',
+            : `Checked In (Late • ${locationStatus})`,
           isThirdLateMarkTriggered
-            ? `Check-in after ${formatTime12Hour(effectiveShift.graceCutoff)} recorded as Late #${currentLateMarks}. 0.5 day automatically deducted from CSL balance.`
-            : `Check-in after ${formatTime12Hour(effectiveShift.graceCutoff)} marked as Late (${currentLateMarks} late mark(s) total).`
+            ? `Check-in after ${formatTime12Hour(effectiveShift.graceCutoff)} recorded as Late #${currentLateMarks} (${locationStatus}). 0.5 day automatically deducted from CSL balance.`
+            : `Check-in after ${formatTime12Hour(effectiveShift.graceCutoff)} marked as Late (${currentLateMarks} late mark(s) total) • Location: ${locationStatus}.`
+        );
+      } else if (locationStatus === 'Location Unavailable') {
+        showToast(
+          'warning',
+          'Checked In — Location Unavailable',
+          `Attendance recorded at ${new Date(serverTimestamp).toLocaleTimeString()}, but GPS permission was denied or unavailable. Marked as "Location Unavailable".`
         );
       } else {
         showToast(
           'success',
-          'Checked In Successfully',
-          `Attendance recorded at ${new Date(serverTimestamp).toLocaleTimeString()} (On-Time within ${formatTime12Hour(effectiveShift.graceCutoff)} grace window).`
+          `Checked In Successfully (${locationStatus})`,
+          `Attendance recorded at ${new Date(serverTimestamp).toLocaleTimeString()} • Location Status: ${locationStatus}.`
         );
       }
     } finally {
@@ -394,28 +443,34 @@ export const PunchWidget: React.FC<{
     setIsCapturingGps(true);
 
     const serverTimestamp = new Date().toISOString();
-    let capturedGps: AttendanceGeoLocation;
+    let capturedGps: AttendanceGeoLocation | undefined;
 
     try {
       capturedGps = await captureDeviceLocation('OUT', serverTimestamp);
     } catch (err: any) {
       const msg =
         err?.message ||
-        'Location permission denied or unavailable. Attendance Check-Out was not submitted.';
+        'Location permission denied or unavailable during Check-Out.';
       setGpsError(msg);
-      setIsCapturingGps(false);
-      showToast('error', 'Check-Out Blocked — Location Required', msg);
-      return;
     }
 
     try {
+      const locEval = evaluateAttendanceLocation(capturedGps, officeLocation);
+      const enrichedGps: AttendanceGeoLocation | undefined = capturedGps
+        ? {
+            ...capturedGps,
+            locationStatus: locEval.locationStatus,
+            distanceFromOfficeMeters: locEval.distanceFromOfficeMeters,
+          }
+        : undefined;
+
       const nextPunches = [
         ...punches,
         {
           type: 'OUT' as const,
           timestamp: serverTimestamp,
-          locationNote: 'Office HQ',
-          gpsLocation: capturedGps,
+          locationNote: locEval.locationStatus,
+          ...(enrichedGps ? { gpsLocation: enrichedGps } : {}),
         },
       ];
 
@@ -449,7 +504,8 @@ export const PunchWidget: React.FC<{
         employeeEcode: currentEmployee.ecode,
         department: currentEmployee.department,
         punches: nextPunches,
-        checkOutLocation: capturedGps,
+        checkOutLocation: enrichedGps || todayRecord.checkOutLocation,
+        locationStatus: todayRecord.locationStatus || locEval.locationStatus,
         breakMinutes,
         totalHours: computedHours,
         status: evaluation.status,
@@ -466,7 +522,7 @@ export const PunchWidget: React.FC<{
         'Checked Out Successfully',
         `Logged ${computedHours} hrs • Status: ${
           evaluation.status === 'Absent' ? 'Under-reported' : evaluation.status
-        }`
+        } • Check-Out Location: ${locEval.locationStatus}`
       );
     } finally {
       setIsCapturingGps(false);
@@ -639,6 +695,36 @@ export const PunchWidget: React.FC<{
               </span>
             )}
           </div>
+
+          {todayRecord && (
+            <div className="flex items-center justify-between text-xs px-1">
+              <span className="text-neutral-500">Check-In Location Status:</span>
+              {(() => {
+                const locStatus =
+                  todayRecord.locationStatus ||
+                  todayRecord.checkInLocation?.locationStatus ||
+                  (todayRecord.checkInLocation
+                    ? evaluateAttendanceLocation(
+                        todayRecord.checkInLocation,
+                        officeLocation
+                      ).locationStatus
+                    : 'Location Unavailable');
+                return (
+                  <Badge
+                    variant={
+                      locStatus === 'Office'
+                        ? 'success'
+                        : locStatus === 'Outside Office'
+                        ? 'warning'
+                        : 'danger'
+                    }
+                  >
+                    {locStatus}
+                  </Badge>
+                );
+              })()}
+            </div>
+          )}
         </div>
       </div>
     </Card>
