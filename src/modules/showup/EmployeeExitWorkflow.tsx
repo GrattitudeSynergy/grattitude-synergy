@@ -145,10 +145,16 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
   );
   const [taskAssigneeId, setTaskAssigneeId] = useState('');
 
-  // Stage Checklist Inspector Modal
-  const [inspectExitRecord, setInspectExitRecord] =
-    useState<EmployeeExitRecord | null>(null);
+  // Stage Checklist & Work Plan Inspector Modal (derived live from exitRecords)
+  const [inspectExitRecordId, setInspectExitRecordId] = useState<string | null>(
+    null
+  );
   const [stageNoteInput, setStageNoteInput] = useState('');
+
+  const inspectExitRecord = useMemo(
+    () => exitRecords.find((r) => r.id === inspectExitRecordId) || null,
+    [exitRecords, inspectExitRecordId]
+  );
 
   useEffect(() => {
     const unsub = FirestoreEngine.subscribeCollection<EmployeeExitRecord>(
@@ -187,6 +193,21 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
       return mgrNorm === currentNormId || mgrNorm === currentNormEcode;
     });
   }, [exitRecords, isAdmin, isCEO, currentNormId, currentNormEcode]);
+
+  // Handover tasks assigned to the current employee from other employees' exit work plans
+  const assignedHandoverItems = useMemo(() => {
+    const items: Array<{ record: EmployeeExitRecord; task: ExitWorkPlanTask }> = [];
+    for (const rec of exitRecords) {
+      const tasks = Array.isArray(rec.workPlanTasks) ? rec.workPlanTasks : [];
+      for (const task of tasks) {
+        const assigneeNorm = PermissionsService.normalizeEmpId(task.handoverToEmployeeId);
+        if (assigneeNorm && (assigneeNorm === currentNormId || assigneeNorm === currentNormEcode)) {
+          items.push({ record: rec, task });
+        }
+      }
+    }
+    return items;
+  }, [exitRecords, currentNormId, currentNormEcode]);
 
   // Check if a Manager Work Plan upload is due or overdue (within 2 days of resignation submission)
   const getWorkPlanSlaStatus = (rec: EmployeeExitRecord) => {
@@ -357,11 +378,33 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
   const handleSaveManagerWorkPlan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!workPlanExitRecord) return;
-    if (workPlanTasks.length === 0) {
+
+    // Auto-include any filled-in task form fields if manager clicked Save directly without clicking "+ Add Task"
+    let finalTasks = [...workPlanTasks];
+    if (taskProject.trim() && taskPendingDesc.trim() && taskAssigneeId) {
+      const assignee = employees.find((emp) => emp.id === taskAssigneeId);
+      finalTasks.push({
+        id: `wpt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        projectOrResponsibility: taskProject.trim(),
+        pendingTaskDescription: taskPendingDesc.trim(),
+        handoverDetails:
+          taskHandoverDetails.trim() || 'Standard documentation & walkthrough',
+        ktRequirement:
+          taskKtReq.trim() || 'Live KT session + repository walkthrough',
+        deadline: taskDeadline || workPlanExitRecord.proposedLastWorkingDay,
+        handoverToEmployeeId: taskAssigneeId,
+        handoverToEmployeeName: assignee
+          ? `${assignee.name} (${assignee.ecode})`
+          : taskAssigneeId,
+        status: 'Pending',
+      });
+    }
+
+    if (finalTasks.length === 0) {
       showToast(
         'error',
         'Work Plan Tasks Required',
-        'Please add at least one responsibility / handover task with an assigned person before uploading the Work Plan.'
+        'Please enter a project/responsibility, pending task description, and handover owner (or click "+ Add Task to Work Plan") before uploading.'
       );
       return;
     }
@@ -380,7 +423,7 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
         completed: true,
         completedAt: nowIso,
         actor: currentEmployee.name,
-        notes: `Uploaded Work Plan with ${workPlanTasks.length} handover task(s).`,
+        notes: `Uploaded Work Plan with ${finalTasks.length} handover task(s).`,
       },
     };
 
@@ -390,8 +433,8 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
       workPlanUploadedBy: currentEmployee.name,
       workPlanSummary:
         workPlanSummary.trim() ||
-        `Structured transition & KT work plan covering ${workPlanTasks.length} critical deliverables.`,
-      workPlanTasks,
+        `Structured transition & KT work plan covering ${finalTasks.length} critical deliverables.`,
+      workPlanTasks: finalTasks,
       currentStage: 'HR Review',
       stageChecklist: updatedChecklist,
       updatedAt: nowIso,
@@ -407,7 +450,7 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
     await NotificationService.create({
       recipientId: updatedRecord.employeeId,
       title: 'Manager Uploaded Your Exit Work Plan & KT Schedule',
-      message: `${currentEmployee.name} uploaded your transition Work Plan (${workPlanTasks.length} tasks). Please complete Knowledge Transfer before your Last Working Day (${updatedRecord.proposedLastWorkingDay}).`,
+      message: `${currentEmployee.name} uploaded your transition Work Plan (${finalTasks.length} tasks). Please complete Knowledge Transfer before your Last Working Day (${updatedRecord.proposedLastWorkingDay}).`,
       route: '/showup',
       actorName: currentEmployee.name,
     });
@@ -420,7 +463,7 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
       actorName: currentEmployee.name,
     });
 
-    for (const task of workPlanTasks) {
+    for (const task of finalTasks) {
       await NotificationService.create({
         recipientId: task.handoverToEmployeeId,
         title: 'Handover & Knowledge Transfer Task Assigned',
@@ -435,14 +478,19 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
       actor: currentEmployee,
       targetId: updatedRecord.id,
       targetType: 'EmployeeExitRecord',
-      details: `Uploaded mandatory Manager Work Plan for ${updatedRecord.employeeName} (${updatedRecord.employeeEcode}) with ${workPlanTasks.length} task(s).`,
+      details: `Uploaded mandatory Manager Work Plan for ${updatedRecord.employeeName} (${updatedRecord.employeeEcode}) with ${finalTasks.length} task(s).`,
     });
 
     showToast(
       'success',
       'Manager Work Plan Uploaded',
-      `Transition work plan with ${workPlanTasks.length} task(s) saved and notifications sent.`
+      `Transition work plan with ${finalTasks.length} task(s) saved and synced for Employee, HR/Admin, and handover owners.`
     );
+    setTaskProject('');
+    setTaskPendingDesc('');
+    setTaskHandoverDetails('');
+    setTaskKtReq('');
+    setTaskAssigneeId('');
     setWorkPlanExitRecord(null);
   };
 
@@ -452,7 +500,7 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
     taskId: string,
     nextStatus: ExitWorkPlanTask['status']
   ) => {
-    const nextTasks = rec.workPlanTasks.map((t) =>
+    const nextTasks = (rec.workPlanTasks || []).map((t) =>
       t.id === taskId ? { ...t, status: nextStatus } : t
     );
     const updated: EmployeeExitRecord = {
@@ -465,9 +513,6 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
       rec.id,
       updated
     );
-    if (inspectExitRecord?.id === rec.id) {
-      setInspectExitRecord(updated);
-    }
     showToast(
       'info',
       'Handover Task Updated',
@@ -481,6 +526,21 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
     stageKey: keyof EmployeeExitRecord['stageChecklist'],
     stageLabel: ExitWorkflowStage
   ) => {
+    // Prevent marking Stage 3 (Manager Work Plan Upload) complete without actual work plan tasks
+    if (stageKey === 'workPlanUpload' && (rec.workPlanTasks || []).length === 0) {
+      setInspectExitRecordId(null);
+      setWorkPlanExitRecord(rec);
+      setWorkPlanSummary(rec.workPlanSummary || '');
+      setWorkPlanTasks(rec.workPlanTasks || []);
+      setTaskDeadline(rec.proposedLastWorkingDay);
+      showToast(
+        'info',
+        'Upload Work Plan Tasks First',
+        'Please add at least one transition / KT task and save the Work Plan to complete Stage 3.'
+      );
+      return;
+    }
+
     const nowIso = new Date().toISOString();
     const updatedChecklist = {
       ...rec.stageChecklist,
@@ -544,7 +604,6 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
     });
 
     setStageNoteInput('');
-    setInspectExitRecord(updatedRecord);
     showToast(
       'success',
       'Exit Workflow Stage Completed',
@@ -654,69 +713,158 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
                   <Button
                     size="xs"
                     variant="primary"
-                    onClick={() => setInspectExitRecord(rec)}
+                    onClick={() => setInspectExitRecordId(rec.id)}
                   >
-                    View 10-Stage Checklist & KT Tasks ({completedStagesCount}/10)
+                    View 10-Stage Checklist & Work Plan ({completedStagesCount}/10)
                   </Button>
                 </div>
 
-                {rec.workPlanTasks.length > 0 && (
-                  <div>
-                    <div className="text-xs font-bold text-neutral-800 mb-2">
-                      Assigned Knowledge Transfer (KT) & Handover Work Plan Tasks:
+                {((rec.workPlanTasks && rec.workPlanTasks.length > 0) ||
+                  rec.workPlanSummary ||
+                  rec.stageChecklist.workPlanUpload.completed) ? (
+                  <div className="space-y-3 pt-2 border-t border-neutral-200">
+                    <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-extrabold text-sky-950 flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5 text-sky-700" />
+                          <span>Manager Transition & Knowledge Transfer (KT) Work Plan</span>
+                        </div>
+                        {rec.workPlanUploadedBy && (
+                          <span className="text-[11px] font-semibold text-sky-800">
+                            Uploaded by {rec.workPlanUploadedBy}
+                            {rec.workPlanUploadedAt
+                              ? ` on ${new Date(rec.workPlanUploadedAt).toLocaleDateString()}`
+                              : ''}
+                          </span>
+                        )}
+                      </div>
+                      {rec.workPlanSummary && (
+                        <p className="text-xs text-sky-900 mt-1.5 whitespace-pre-wrap">
+                          {rec.workPlanSummary}
+                        </p>
+                      )}
                     </div>
-                    <Table
-                      headers={[
-                        'Project / Responsibility',
-                        'Pending Task',
-                        'Handover & KT Details',
-                        'Deadline',
-                        'Taking Over Person',
-                        'Status',
-                      ]}
-                    >
-                      {rec.workPlanTasks.map((t) => (
-                        <tr key={t.id}>
-                          <td className="px-3 py-2 text-xs font-bold">
-                            {t.projectOrResponsibility}
-                          </td>
-                          <td className="px-3 py-2 text-xs">
-                            {t.pendingTaskDescription}
-                          </td>
-                          <td className="px-3 py-2 text-xs text-neutral-600">
-                            {t.handoverDetails} • KT: {t.ktRequirement}
-                          </td>
-                          <td className="px-3 py-2 text-xs font-mono">
-                            {t.deadline}
-                          </td>
-                          <td className="px-3 py-2 text-xs font-bold text-sky-800">
-                            {t.handoverToEmployeeName}
-                          </td>
-                          <td className="px-3 py-2">
-                            <select
-                              value={t.status}
-                              onChange={(e) =>
-                                handleToggleWorkPlanTaskStatus(
-                                  rec,
-                                  t.id,
-                                  e.target.value as any
-                                )
-                              }
-                              className="px-2 py-1 text-xs font-bold border border-neutral-300 rounded-md bg-white"
-                            >
-                              <option value="Pending">Pending</option>
-                              <option value="In Progress">In Progress</option>
-                              <option value="Completed">Completed</option>
-                            </select>
-                          </td>
-                        </tr>
-                      ))}
-                    </Table>
+
+                    {(rec.workPlanTasks || []).length > 0 && (
+                      <div>
+                        <div className="text-xs font-bold text-neutral-800 mb-2">
+                          Assigned Knowledge Transfer (KT) & Handover Work Plan Tasks ({rec.workPlanTasks.length}):
+                        </div>
+                        <Table
+                          headers={[
+                            'Project / Responsibility',
+                            'Pending Task',
+                            'Handover & KT Details',
+                            'Deadline',
+                            'Taking Over Person',
+                            'Status',
+                          ]}
+                        >
+                          {rec.workPlanTasks.map((t) => (
+                            <tr key={t.id}>
+                              <td className="px-3 py-2 text-xs font-bold">
+                                {t.projectOrResponsibility}
+                              </td>
+                              <td className="px-3 py-2 text-xs">
+                                {t.pendingTaskDescription}
+                              </td>
+                              <td className="px-3 py-2 text-xs text-neutral-600">
+                                {t.handoverDetails} • KT: {t.ktRequirement}
+                              </td>
+                              <td className="px-3 py-2 text-xs font-mono">
+                                {t.deadline}
+                              </td>
+                              <td className="px-3 py-2 text-xs font-bold text-sky-800">
+                                {t.handoverToEmployeeName}
+                              </td>
+                              <td className="px-3 py-2">
+                                <select
+                                  value={t.status}
+                                  onChange={(e) =>
+                                    handleToggleWorkPlanTaskStatus(
+                                      rec,
+                                      t.id,
+                                      e.target.value as any
+                                    )
+                                  }
+                                  className="px-2 py-1 text-xs font-bold border border-neutral-300 rounded-md bg-white"
+                                >
+                                  <option value="Pending">Pending</option>
+                                  <option value="In Progress">In Progress</option>
+                                  <option value="Completed">Completed</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
+                    Your Reporting Manager ({rec.reportingManagerName}) has not uploaded the transition Work Plan yet (2-day SLA deadline: {rec.workPlanDueDate.slice(0, 10)}).
                   </div>
                 )}
               </div>
             );
           })}
+        </Card>
+      )}
+
+      {/* Handover Tasks Assigned to Me (When another employee is exiting and I am taking over) */}
+      {assignedHandoverItems.length > 0 && (
+        <Card
+          title="Handover & Knowledge Transfer Tasks Assigned to Me"
+          subtitle="Responsibilities assigned to you from colleagues' Exit Work Plans."
+        >
+          <Table
+            headers={[
+              'Exiting Employee',
+              'Project / Responsibility',
+              'Pending Task',
+              'Handover & KT Details',
+              'Deadline',
+              'Status',
+            ]}
+          >
+            {assignedHandoverItems.map(({ record, task }) => (
+              <tr key={`${record.id}_${task.id}`}>
+                <td className="px-3 py-2 text-xs font-bold text-neutral-900">
+                  {record.employeeName} ({record.employeeEcode})
+                  <div className="text-[11px] font-normal text-neutral-500">
+                    LWD: {record.proposedLastWorkingDay}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-xs font-bold">
+                  {task.projectOrResponsibility}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {task.pendingTaskDescription}
+                </td>
+                <td className="px-3 py-2 text-xs text-neutral-600">
+                  {task.handoverDetails} • KT: {task.ktRequirement}
+                </td>
+                <td className="px-3 py-2 text-xs font-mono">{task.deadline}</td>
+                <td className="px-3 py-2">
+                  <select
+                    value={task.status}
+                    onChange={(e) =>
+                      handleToggleWorkPlanTaskStatus(
+                        record,
+                        task.id,
+                        e.target.value as any
+                      )
+                    }
+                    className="px-2 py-1 text-xs font-bold border border-neutral-300 rounded-md bg-white"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </Table>
         </Card>
       )}
 
@@ -748,12 +896,19 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
           >
             {managedExitRecords.map((rec) => {
               const sla = getWorkPlanSlaStatus(rec);
-              const pendingTasksCount = rec.workPlanTasks.filter(
+              const tasksList = Array.isArray(rec.workPlanTasks)
+                ? rec.workPlanTasks
+                : [];
+              const pendingTasksCount = tasksList.filter(
                 (t) => t.status !== 'Completed'
               ).length;
               const completedStages = Object.values(rec.stageChecklist).filter(
                 (s) => s.completed
               ).length;
+              const hasUploadedWorkPlan =
+                tasksList.length > 0 ||
+                Boolean(rec.workPlanSummary) ||
+                rec.stageChecklist.workPlanUpload.completed;
 
               return (
                 <tr key={rec.id} className="hover:bg-neutral-50">
@@ -799,36 +954,42 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
                   </td>
 
                   <td className="px-3 py-3 text-xs">
-                    {rec.workPlanTasks.length === 0 ? (
+                    {tasksList.length === 0 ? (
                       <span className="text-amber-700 font-semibold">
                         Awaiting Work Plan
                       </span>
                     ) : (
                       <span className="font-mono font-bold text-neutral-800">
-                        {pendingTasksCount} Pending / {rec.workPlanTasks.length}{' '}
-                        Total
+                        {pendingTasksCount} Pending / {tasksList.length} Total
                       </span>
                     )}
                   </td>
 
                   <td className="px-3 py-3">
                     <div className="flex flex-wrap items-center gap-1.5">
+                      {hasUploadedWorkPlan && (
+                        <Button
+                          size="xs"
+                          variant="primary"
+                          icon={<FileText className="w-3 h-3" />}
+                          onClick={() => setInspectExitRecordId(rec.id)}
+                        >
+                          View Work Plan
+                        </Button>
+                      )}
+
                       <Button
                         size="xs"
-                        variant={
-                          rec.stageChecklist.workPlanUpload.completed
-                            ? 'outline'
-                            : 'primary'
-                        }
+                        variant={hasUploadedWorkPlan ? 'outline' : 'primary'}
                         icon={<Upload className="w-3 h-3" />}
                         onClick={() => {
                           setWorkPlanExitRecord(rec);
                           setWorkPlanSummary(rec.workPlanSummary || '');
-                          setWorkPlanTasks(rec.workPlanTasks || []);
+                          setWorkPlanTasks(tasksList);
                           setTaskDeadline(rec.proposedLastWorkingDay);
                         }}
                       >
-                        {rec.stageChecklist.workPlanUpload.completed
+                        {hasUploadedWorkPlan
                           ? 'Edit Work Plan'
                           : 'Upload Work Plan'}
                       </Button>
@@ -837,7 +998,7 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
                         size="xs"
                         variant="secondary"
                         icon={<ShieldCheck className="w-3 h-3" />}
-                        onClick={() => setInspectExitRecord(rec)}
+                        onClick={() => setInspectExitRecordId(rec.id)}
                       >
                         Manage 10 Stages
                       </Button>
@@ -1183,14 +1344,14 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
       {/* MODAL 3: 10-Stage Exit Workflow Checklist & Pending Tasks Inspector */}
       <Modal
         isOpen={Boolean(inspectExitRecord)}
-        onClose={() => setInspectExitRecord(null)}
+        onClose={() => setInspectExitRecordId(null)}
         size="2xl"
         title={
           inspectExitRecord
-            ? `Complete 10-Stage Exit Workflow — ${inspectExitRecord.employeeName} (${inspectExitRecord.employeeEcode})`
+            ? `Complete 10-Stage Exit Workflow & Work Plan — ${inspectExitRecord.employeeName} (${inspectExitRecord.employeeEcode})`
             : 'Exit Workflow Details'
         }
-        subtitle="Monitor every stage from Resignation Submission and Manager Work Plan to Departmental Clearance, Asset Return, Final Settlement, and Final Exit Confirmation."
+        subtitle="Monitor the uploaded Manager Work Plan, pending KT tasks, and every stage from Resignation Submission to Final Exit Confirmation."
       >
         {inspectExitRecord && (
           <div className="space-y-5">
@@ -1320,12 +1481,34 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
             </Table>
 
             {/* Pending Tasks & Responsible Persons Table */}
-            <div>
-              <h4 className="text-xs font-bold uppercase text-neutral-600 mb-2">
-                Work Plan Pending Tasks & Responsible Persons (
-                {inspectExitRecord.workPlanTasks.length})
-              </h4>
-              {inspectExitRecord.workPlanTasks.length === 0 ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-xs font-bold uppercase text-neutral-600">
+                  Manager Work Plan & Pending Handover Tasks (
+                  {(inspectExitRecord.workPlanTasks || []).length})
+                </h4>
+                {inspectExitRecord.workPlanUploadedBy && (
+                  <span className="text-[11px] font-semibold text-sky-800">
+                    Uploaded by {inspectExitRecord.workPlanUploadedBy}
+                    {inspectExitRecord.workPlanUploadedAt
+                      ? ` on ${new Date(inspectExitRecord.workPlanUploadedAt).toLocaleString()}`
+                      : ''}
+                  </span>
+                )}
+              </div>
+
+              {inspectExitRecord.workPlanSummary && (
+                <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-950">
+                  <div className="font-bold text-sky-900 mb-1">
+                    Executive Transition & Handover Summary:
+                  </div>
+                  <div className="whitespace-pre-wrap">
+                    {inspectExitRecord.workPlanSummary}
+                  </div>
+                </div>
+              )}
+
+              {(inspectExitRecord.workPlanTasks || []).length === 0 ? (
                 <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between">
                   <span>
                     Manager Work Plan has not been uploaded yet (Mandatory
@@ -1336,10 +1519,11 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
                     variant="primary"
                     onClick={() => {
                       const target = inspectExitRecord;
-                      setInspectExitRecord(null);
+                      setInspectExitRecordId(null);
                       setWorkPlanExitRecord(target);
                       setWorkPlanSummary(target.workPlanSummary || '');
                       setWorkPlanTasks(target.workPlanTasks || []);
+                      setTaskDeadline(target.proposedLastWorkingDay);
                     }}
                   >
                     Upload Work Plan Now
@@ -1356,7 +1540,7 @@ export const EmployeeExitWorkflow: React.FC<EmployeeExitWorkflowProps> = ({
                     'Task Status',
                   ]}
                 >
-                  {inspectExitRecord.workPlanTasks.map((t) => (
+                  {(inspectExitRecord.workPlanTasks || []).map((t) => (
                     <tr key={t.id}>
                       <td className="px-3 py-2 text-xs font-bold">
                         {t.projectOrResponsibility}

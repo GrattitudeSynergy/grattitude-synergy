@@ -770,6 +770,76 @@ async function broadcastCloudRealtimePacket(packet: Record<string, any>): Promis
   }
 }
 
+function mergeExitRecord(existing: any, incoming: any): any {
+  if (!existing || typeof existing !== 'object') return incoming;
+  if (!incoming || typeof incoming !== 'object') return existing;
+
+  const existingUpdated = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+  const incomingUpdated = incoming.updatedAt ? new Date(incoming.updatedAt).getTime() : 0;
+
+  const primary = incomingUpdated >= existingUpdated ? incoming : existing;
+  const secondary = incomingUpdated >= existingUpdated ? existing : incoming;
+
+  const primaryTasks = Array.isArray(primary.workPlanTasks) ? primary.workPlanTasks : [];
+  const secondaryTasks = Array.isArray(secondary.workPlanTasks) ? secondary.workPlanTasks : [];
+  const mergedTasks = primaryTasks.length > 0 ? primaryTasks : secondaryTasks;
+
+  const primaryChecklist = primary.stageChecklist || {};
+  const secondaryChecklist = secondary.stageChecklist || {};
+  const mergedChecklist: Record<string, any> = { ...secondaryChecklist, ...primaryChecklist };
+  for (const key of Object.keys(mergedChecklist)) {
+    const pStage = primaryChecklist[key];
+    const sStage = secondaryChecklist[key];
+    if (!pStage?.completed && sStage?.completed) {
+      mergedChecklist[key] = sStage;
+    }
+  }
+
+  return {
+    ...secondary,
+    ...primary,
+    workPlanTasks: mergedTasks,
+    workPlanSummary: primary.workPlanSummary || secondary.workPlanSummary,
+    workPlanUploadedAt: primary.workPlanUploadedAt || secondary.workPlanUploadedAt,
+    workPlanUploadedBy: primary.workPlanUploadedBy || secondary.workPlanUploadedBy,
+    stageChecklist: mergedChecklist,
+    id: incoming.id || existing.id,
+  };
+}
+
+async function resolveCloudOuterMessage(outer: any): Promise<any | null> {
+  if (!outer || outer.event !== 'message') return null;
+
+  if (typeof outer.message === 'string' && outer.message.trim()) {
+    try {
+      const parsed = JSON.parse(outer.message);
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      // ntfy.sh turns payloads > 4096 bytes into file attachments and sets
+      // outer.message to a human-readable placeholder. Fall through to attachment fetch.
+    }
+  }
+
+  if (outer.attachment?.url) {
+    try {
+      const attRes = await fetch(outer.attachment.url, { method: 'GET', cache: 'no-store' });
+      if (attRes.ok) {
+        const text = await attRes.text();
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore unreachable attachment
+    }
+  }
+
+  return null;
+}
+
 function applyIncomingPacketToLocal(payload: any): void {
   if (!payload || typeof payload !== 'object') return;
 
@@ -809,6 +879,8 @@ function applyIncomingPacketToLocal(payload: any): void {
           ? mergeEmployeeRecord(existing, { ...existing, ...data, id: docId })
           : collectionName === 'showup_attendance'
           ? mergeAttendanceGpsLocations(existing, { ...existing, ...data, id: docId })
+          : collectionName === 'showup_exit_requests'
+          ? mergeExitRecord(existing, { ...existing, ...data, id: docId })
           : { ...existing, ...data, id: docId };
 
       if (RLS_PROTECTED_REQUEST_COLLECTIONS.has(collectionName)) {
@@ -868,9 +940,11 @@ async function pullCloudEventLog(): Promise<void> {
           if (outer?.id && processedCloudMessageIds.has(outer.id)) {
             continue;
           }
-          if (outer?.event === 'message' && outer?.message) {
-            const inner = JSON.parse(outer.message);
-            applyIncomingPacketToLocal(inner);
+          if (outer?.event === 'message' && (outer?.message || outer?.attachment?.url)) {
+            const inner = await resolveCloudOuterMessage(outer);
+            if (inner) {
+              applyIncomingPacketToLocal(inner);
+            }
             if (outer.id) {
               processedCloudMessageIds.add(outer.id);
             }
@@ -939,7 +1013,14 @@ function applyCentralStateToLocal(state: {
       if (colName === 'employees') continue;
       if (serverDocs && typeof serverDocs === 'object') {
         const localDocs = readLocalCollection<any>(colName);
-        const mergedCol: Record<string, any> = { ...localDocs, ...serverDocs };
+        const mergedCol: Record<string, any> = { ...localDocs };
+        for (const [docId, sDoc] of Object.entries(serverDocs)) {
+          if (colName === 'showup_exit_requests') {
+            mergedCol[docId] = mergeExitRecord(localDocs[docId], sDoc);
+          } else {
+            mergedCol[docId] = sDoc;
+          }
+        }
         for (const docId of Object.keys(mergedCol)) {
           if (mergedDeleted[`${colName}:${docId}`]) {
             delete mergedCol[docId];
@@ -1020,21 +1101,25 @@ export async function synchronizeWithCentralDatabase(): Promise<void> {
       try {
         const cloudEs = new EventSource(`${CLOUD_REALTIME_TOPIC_URL}/sse`);
         cloudEs.onmessage = (evt) => {
-          try {
-            const outer = JSON.parse(evt.data);
-            if (outer?.id && processedCloudMessageIds.has(outer.id)) {
-              return;
-            }
-            if (outer?.event === 'message' && outer?.message) {
-              const inner = JSON.parse(outer.message);
-              applyIncomingPacketToLocal(inner);
-              if (outer.id) {
-                processedCloudMessageIds.add(outer.id);
+          void (async () => {
+            try {
+              const outer = JSON.parse(evt.data);
+              if (outer?.id && processedCloudMessageIds.has(outer.id)) {
+                return;
               }
+              if (outer?.event === 'message' && (outer?.message || outer?.attachment?.url)) {
+                const inner = await resolveCloudOuterMessage(outer);
+                if (inner) {
+                  applyIncomingPacketToLocal(inner);
+                }
+                if (outer.id) {
+                  processedCloudMessageIds.add(outer.id);
+                }
+              }
+            } catch {
+              // Ignore malformed SSE packet
             }
-          } catch {
-            // Ignore malformed SSE packet
-          }
+          })();
         };
       } catch {
         // Fallback to periodic poll below
@@ -1170,8 +1255,8 @@ export const FirestoreEngine = {
     const initialMap = readLocalCollection<T>(collectionName);
     callback(filterCollectionByDatabaseRLS(collectionName, Object.values(initialMap)));
 
-    // Trigger background cloud sync when subscribing to employees
-    if (collectionName === 'employees') {
+    // Trigger background cloud sync when subscribing to core or exit collections
+    if (collectionName === 'employees' || collectionName === 'showup_exit_requests') {
       void pullCloudEventLog();
     }
 
